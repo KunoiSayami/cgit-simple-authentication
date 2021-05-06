@@ -31,13 +31,19 @@ use clap::{Arg, App, SubCommand, ArgMatches};
 use rand::Rng;
 use serde::{Serialize};
 use handlebars::Handlebars;
-use std::borrow::Cow;
-use url::form_urlencoded;
 use sqlx::Connection;
 use crate::datastructures::{Config, FormData};
 use redis::Commands;
 
 const COOKIE_LENGTH: usize = 45;
+
+fn get_current_timestamp() -> u64 {
+    let start = std::time::SystemTime::now();
+    let since_the_epoch = start
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("Time went backwards");
+    since_the_epoch.as_secs()
+}
 
 fn rand_str(len: usize) -> String {
     const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ\
@@ -53,6 +59,11 @@ fn rand_str(len: usize) -> String {
         .collect();
 
     password
+}
+
+fn rand_int() -> i32 {
+    let mut rng = rand::thread_rng();
+    rng.gen()
 }
 
 
@@ -100,8 +111,25 @@ async fn cmd_authenticate_cookie(
     for cookie in cookies.split(';').map(|x| x.trim()) {
         let (key, value) = cookie.split_once('=').unwrap();
         if key.eq("cgit_auth") {
-            if conn.get::<_, i32>(format!("cgit_auth_{}", value)).is_ok() {
-                return Ok(true)
+            let value = base64::decode(value).unwrap_or(vec![]);
+            let value = String::from_utf8(value).unwrap_or("".to_string());
+
+            if !value.contains(';') {
+                break
+            }
+
+            let (key, value) = value.split_once(';').unwrap();//.unwrap_or(("0_0", "0"));
+
+            let (timestamp, _) = key.split_once("_").unwrap_or(("0", ""));
+
+            if get_current_timestamp() - timestamp.parse::<u64>().unwrap_or(0) > cfg.cookie_ttl {
+                break
+            }
+
+            if let Ok(r) = conn.get::<_, String>(format!("cgit_auth_{}", key)) {
+                if r == value {
+                    return Ok(true)
+                }
             }
             break
         }
@@ -142,11 +170,14 @@ async fn cmd_authenticate_post(
 
     // Authenticated via gogs.
     if verify_login(&cfg, &data).await.is_ok() {
-        let cookie = rand_str(COOKIE_LENGTH);
+        let key = format!("{}_{}", get_current_timestamp(), rand_int());
+        let value = rand_str(COOKIE_LENGTH);
 
         // TODO: same here
         let mut conn = redis::Client::open("redis://127.0.0.1/")?;
-        conn.set_ex::<_, &str, i32>(format!("cgit_auth_{}", cookie), "1", cfg.cookie_ttl)?;
+        conn.set_ex::<_, _, i32>(format!("cgit_auth_{}", key), &value, cfg.cookie_ttl as usize)?;
+
+        let cookie_value = base64::encode(format!("{};{}", key, value));
 
         let is_secure = matches
             .value_of("https")
@@ -164,7 +195,7 @@ async fn cmd_authenticate_post(
         println!("Location: {}", location);
         println!(
             "Set-Cookie: cgit_auth={}; Domain={}; Max-Age={}; HttpOnly{}",
-            cookie, domain, cfg.cookie_ttl, cookie_suffix
+            cookie_value, domain, cfg.cookie_ttl, cookie_suffix
         );
     } else {
         println!("Status: 403 Forbidden");

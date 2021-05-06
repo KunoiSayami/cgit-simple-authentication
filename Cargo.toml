@@ -1,6 +1,6 @@
 [package]
 name = "cgit-simple-authentication"
-version = "0.0.2"
+version = "0.1.0"
 authors = ["KunoiSayami <46131041+KunoiSayami@users.noreply.github.com>"]
 edition = "2018"
 
@@ -21,3 +21,4 @@ handlebars = "3.4"
 url = "2.1"
 redis = { version = "0.17.0", features = ["tokio-comp"] }
 sha2 = "0.9.3"
+base64 = "0.13.0"

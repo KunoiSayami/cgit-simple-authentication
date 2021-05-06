@@ -24,15 +24,14 @@ use url::form_urlencoded;
 use std::borrow::Cow;
 use std::path::Path;
 use std::fs::read_to_string;
-use std::convert::TryFrom;
 
 const DEFAULT_CONFIG_LOCATION: &str = "/etc/cgitrc";
-const DEFAULT_COOKIE_TTL: usize = 1200;
+const DEFAULT_COOKIE_TTL: u64 = 1200;
 const DEFAULT_DATABASE_LOCATION: &str = "/etc/cgit/auth.db";
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    pub cookie_ttl: usize,
+    pub cookie_ttl: u64,
     database: String,
 }
 
@@ -52,7 +51,7 @@ impl Config {
 
     pub fn load_from_path<P: AsRef<Path>>(path: P) -> Self {
         let file = read_to_string(path).unwrap_or_default();
-        let mut cookie_ttl: usize = DEFAULT_COOKIE_TTL;
+        let mut cookie_ttl: u64 = DEFAULT_COOKIE_TTL;
         let mut database: &str = "/etc/cgit/auth.db";
         for line in file.lines() {
 
@@ -68,7 +67,7 @@ impl Config {
             };
             let key_name = key.split_once("auth-").unwrap().1;
             match key_name {
-                "cookie-ttl" => cookie_ttl = usize::try_from(value).unwrap_or(DEFAULT_COOKIE_TTL),
+                "cookie-ttl" => cookie_ttl = value.parse().unwrap_or(DEFAULT_COOKIE_TTL),
                 "database" => database = value,
                 _ => {}
             }
