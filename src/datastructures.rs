@@ -18,18 +18,69 @@
  ** along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-
 use sha2::Digest;
 use anyhow::Result;
+use url::form_urlencoded;
+use std::borrow::Cow;
+use std::path::Path;
+use std::fs::read_to_string;
+use std::convert::TryFrom;
 
-#[derive(Debug, Clone, Default)]
+const DEFAULT_CONFIG_LOCATION: &str = "/etc/cgitrc";
+const DEFAULT_COOKIE_TTL: usize = 1200;
+const DEFAULT_DATABASE_LOCATION: &str = "/etc/cgit/auth.db";
+
+#[derive(Debug, Clone)]
 pub struct Config {
+    pub cookie_ttl: usize,
+    database: String,
+}
 
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            cookie_ttl: DEFAULT_COOKIE_TTL,
+            database: DEFAULT_DATABASE_LOCATION.to_string(),
+        }
+    }
 }
 
 impl Config {
     pub fn new() -> Self {
-        Self {}
+        Self::load_from_path(DEFAULT_CONFIG_LOCATION)
+    }
+
+    pub fn load_from_path<P: AsRef<Path>>(path: P) -> Self {
+        let file = read_to_string(path).unwrap_or_default();
+        let mut cookie_ttl: usize = DEFAULT_COOKIE_TTL;
+        let mut database: &str = "/etc/cgit/auth.db";
+        for line in file.lines() {
+
+            let line = line.trim();
+            if !line.contains('=') || !line.starts_with("cgit-simple-auth-") {
+                continue
+            }
+
+            let (key, value) = if line.contains('#') {
+                line.split_once('#').unwrap().0.split_once('=').unwrap()
+            } else {
+                line.split_once('=').unwrap()
+            };
+            let key_name = key.split_once("auth-").unwrap().1;
+            match key_name {
+                "cookie-ttl" => cookie_ttl = usize::try_from(value).unwrap_or(DEFAULT_COOKIE_TTL),
+                "database" => database = value,
+                _ => {}
+            }
+        }
+        Self {
+            cookie_ttl,
+            database: database.to_string()
+        }
+    }
+
+    pub fn get_database_location(&self) -> &str {
+        self.database.as_str()
     }
 }
 
@@ -71,5 +122,37 @@ impl FormData {
             self.hash = self.get_password_sha256()?;
         }
         Ok(self.hash.clone())
+    }
+}
+
+impl From<&[u8]> for FormData {
+    fn from(input: &[u8]) -> Self {
+        let fields = form_urlencoded::parse(input);
+        let mut data = Self::new();
+        for f in fields {
+            match f.0 {
+                Cow::Borrowed("username") => {
+                    data.set_user(f.1.to_string());
+                }
+                Cow::Borrowed("password") => {
+                    data.set_password(f.1.to_string());
+                    data.get_password_sha256_cache().unwrap();
+                }
+                _ => {}
+            }
+        }
+        data
+    }
+}
+
+impl From<&String> for FormData {
+    fn from(s: &String) -> Self {
+        Self::from(s.as_bytes())
+    }
+}
+
+impl From<String> for FormData {
+    fn from(s: String) -> Self {
+        Self::from(&s)
     }
 }
