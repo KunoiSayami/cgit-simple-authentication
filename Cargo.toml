@@ -1,6 +1,6 @@
 [package]
 name = "cgit-simple-authentication"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["KunoiSayami <46131041+KunoiSayami@users.noreply.github.com>"]
 edition = "2018"
 
@@ -13,7 +13,6 @@ serde_derive = "1"
 serde = { version = "1", features = ["derive"] }
 anyhow = "1"
 toml = "0.5"
-syslog = "5.0.0"
 sqlx = { version = "0.5", features = [ "json", "sqlite", "runtime-actix-native-tls"] }
 rand = "0.7"
 clap = "2.33"

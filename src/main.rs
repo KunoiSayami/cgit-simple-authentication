@@ -21,12 +21,9 @@
 mod database;
 mod datastructures;
 
-use std::fs::OpenOptions;
 use anyhow::Result;
-use std::io::{Write, stdin, Read};
-use std::{process, env};
-use log::LevelFilter;
-use syslog::{Formatter3164, Facility, BasicLogger};
+use std::io::{stdin, Read};
+use std::env;
 use clap::{Arg, App, SubCommand, ArgMatches};
 use rand::Rng;
 use serde::{Serialize};
@@ -73,9 +70,9 @@ struct Meta<'a> {
     redirect: &'a str,
 }
 
-// Verify username and password via gogs.
+
 async fn verify_login(cfg: &Config, data: &FormData) -> Result<bool> {
-    let mut conn = sqlx::SqliteConnection::connect("/tmp/database.db").await?;
+    let mut conn = sqlx::SqliteConnection::connect(cfg.get_database_location()).await?;
     let password_sha = data.get_password_sha256()?;
     let ret = sqlx::query(r#"SELECT 1 FROM "accounts" WHERE "user" = ? AND "password" = ? "#)
         .bind(data.get_user())
@@ -141,6 +138,11 @@ async fn cmd_authenticate_cookie(
 
 
 async fn cmd_init(cfg: Config) -> Result<()> {
+    log::trace!("{}", cfg.get_database_location());
+    let loc = std::path::Path::new(cfg.get_database_location());
+    if ! loc.exists() {
+        std::fs::File::create(loc)?;
+    }
 
     let mut conn = sqlx::SqliteConnection::connect(cfg.get_database_location()).await?;
 
@@ -153,7 +155,9 @@ async fn cmd_init(cfg: Config) -> Result<()> {
         sqlx::query(database::current::CREATE_TABLES)
             .execute(&mut conn)
             .await?;
+        log::info!("Initialize the database successfully");
     }
+
 
     Ok(())
 }
@@ -174,7 +178,6 @@ async fn cmd_authenticate_post(
         let key = format!("{}_{}", get_current_timestamp(), rand_int());
         let value = rand_str(COOKIE_LENGTH);
 
-        // TODO: same here
         let redis_conn = redis::Client::open("redis://127.0.0.1/")?;
         let mut conn = redis_conn.get_async_connection().await?;
         conn.set_ex::<_, _, i32>(format!("cgit_auth_{}", key), &value, cfg.cookie_ttl as usize).await?;
@@ -223,11 +226,6 @@ async fn cmd_body(matches: &ArgMatches<'_>, _cfg: Config) {
         .unwrap();
 }
 
-// Processing the `body` called by cron.
-fn cmd_expire(_matches: &ArgMatches, cfg: Config) {
-    unimplemented!();
-}
-
 
 async fn async_main(arg_matches: ArgMatches<'_>, cfg: Config) -> Result<i32>{
     match arg_matches.subcommand() {
@@ -242,9 +240,6 @@ async fn async_main(arg_matches: ArgMatches<'_>, cfg: Config) -> Result<i32>{
         ("body", Some(matches)) => {
             cmd_body(matches, cfg).await;
         }
-        ("expire", Some(matches)) => {
-            cmd_expire(matches, cfg);
-        }
         ("init", Some(matches)) => {
             cmd_init(cfg).await?;
         }
@@ -255,29 +250,7 @@ async fn async_main(arg_matches: ArgMatches<'_>, cfg: Config) -> Result<i32>{
 
 
 fn main() -> Result<()>{
-
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/output")?;
-    let args = std::env::args().collect::<Vec<String>>().join(" ");
-    //args.push("\n".into());
-    file.write_all(args.as_bytes())?;
-    file.write_all("\n".as_bytes())?;
-    //println!(r#"<meta name="test">"#);
-
-
-    let formatter = Formatter3164 {
-        facility: Facility::LOG_USER,
-        hostname: None,
-        process: "cgit-gogs-auth-filter".into(),
-        pid: process::id() as i32,
-    };
-
-    let logger = syslog::unix(formatter).expect("could not connect to syslog");
-    if let Ok(()) = log::set_boxed_logger(Box::new(BasicLogger::new(logger))) {
-        log::set_max_level(LevelFilter::Debug);
-    }
+    env_logger::init();
 
     // Prints each argument on a separate line
     for (nth, argument) in env::args().enumerate() {
@@ -317,7 +290,6 @@ fn main() -> Result<()>{
                 .args(sub_args),
         )
         .subcommand(SubCommand::with_name("init").about("Init sqlite database"))
-        //.subcommand(SubCommand::with_name("expire").about("Check and clean all expired cookies"))
         .get_matches();
 
     // Load filter configurations

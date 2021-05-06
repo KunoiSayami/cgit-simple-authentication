@@ -33,6 +33,7 @@ const DEFAULT_DATABASE_LOCATION: &str = "/etc/cgit/auth.db";
 pub struct Config {
     pub cookie_ttl: u64,
     database: String,
+    //access_node: hashmap,
 }
 
 impl Default for Config {
