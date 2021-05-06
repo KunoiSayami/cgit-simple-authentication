@@ -33,7 +33,7 @@ use serde::{Serialize};
 use handlebars::Handlebars;
 use sqlx::Connection;
 use crate::datastructures::{Config, FormData};
-use redis::Commands;
+use redis::AsyncCommands;
 
 const COOKIE_LENGTH: usize = 45;
 
@@ -105,8 +105,9 @@ async fn cmd_authenticate_cookie(
         return Ok(false)
     }
 
-    // TODO: use async connection to redis
-    let mut conn = redis::Client::open("redis://127.0.0.1/")?;
+    let redis_conn = redis::Client::open("redis://127.0.0.1/")?;
+    let mut conn = redis_conn.get_async_connection().await?;
+
 
     for cookie in cookies.split(';').map(|x| x.trim()) {
         let (key, value) = cookie.split_once('=').unwrap();
@@ -126,7 +127,7 @@ async fn cmd_authenticate_cookie(
                 break
             }
 
-            if let Ok(r) = conn.get::<_, String>(format!("cgit_auth_{}", key)) {
+            if let Ok(r) = conn.get::<_, String>(format!("cgit_auth_{}", key)).await {
                 if r == value {
                     return Ok(true)
                 }
@@ -174,8 +175,9 @@ async fn cmd_authenticate_post(
         let value = rand_str(COOKIE_LENGTH);
 
         // TODO: same here
-        let mut conn = redis::Client::open("redis://127.0.0.1/")?;
-        conn.set_ex::<_, _, i32>(format!("cgit_auth_{}", key), &value, cfg.cookie_ttl as usize)?;
+        let redis_conn = redis::Client::open("redis://127.0.0.1/")?;
+        let mut conn = redis_conn.get_async_connection().await?;
+        conn.set_ex::<_, _, i32>(format!("cgit_auth_{}", key), &value, cfg.cookie_ttl as usize).await?;
 
         let cookie_value = base64::encode(format!("{};{}", key, value));
 
