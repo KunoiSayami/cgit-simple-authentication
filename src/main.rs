@@ -31,8 +31,10 @@ use handlebars::Handlebars;
 use sqlx::Connection;
 use crate::datastructures::{Config, FormData};
 use redis::AsyncCommands;
+use std::result::Result::Ok;
 
 const COOKIE_LENGTH: usize = 45;
+
 
 fn get_current_timestamp() -> u64 {
     let start = std::time::SystemTime::now();
@@ -71,22 +73,10 @@ struct Meta<'a> {
 }
 
 
-async fn verify_login(cfg: &Config, data: &FormData) -> Result<bool> {
-    let mut conn = sqlx::SqliteConnection::connect(cfg.get_database_location()).await?;
-    let password_sha = data.get_password_sha256()?;
-    let ret = sqlx::query(r#"SELECT 1 FROM "accounts" WHERE "user" = ? AND "password" = ? "#)
-        .bind(data.get_user())
-        .bind(password_sha)
-        .fetch_all(&mut conn)
-        .await?;
-    Ok(ret.len() > 0)
-}
-
-
 // Processing the `authenticate-basic` called by cgit.
 fn cmd_authenticate_basic(
-    matches: &ArgMatches,
-    cfg: Config,
+    _matches: &ArgMatches,
+    _cfg: Config,
 ) -> Result<()> {
     unimplemented!()
 }
@@ -109,8 +99,8 @@ async fn cmd_authenticate_cookie(
     for cookie in cookies.split(';').map(|x| x.trim()) {
         let (key, value) = cookie.split_once('=').unwrap();
         if key.eq("cgit_auth") {
-            let value = base64::decode(value).unwrap_or(vec![]);
-            let value = String::from_utf8(value).unwrap_or("".to_string());
+            let value = base64::decode(value).unwrap_or_default();
+            let value = std::str::from_utf8(&value).unwrap_or("");
 
             if !value.contains(';') {
                 break
@@ -162,6 +152,22 @@ async fn cmd_init(cfg: Config) -> Result<()> {
     Ok(())
 }
 
+async fn verify_login(cfg: &Config, data: &FormData) -> Result<bool> {
+    let database_file_name = std::path::Path::new(datastructures::CACHE_DIR)
+        .join(std::path::Path::new(cfg.get_database_location()).file_name().unwrap());
+    std::fs::copy(cfg.get_database_location(), database_file_name.clone())?;
+    let mut conn = sqlx::SqliteConnection::connect(database_file_name.to_str().unwrap()).await?;
+    let password_sha = data.get_password_sha256()?;
+    log::debug!("password: {}", password_sha);
+    let ret = sqlx::query(r#"SELECT 1 FROM "accounts" WHERE "user" = ? AND "password" = ? "#)
+        .bind(data.get_user())
+        .bind(password_sha)
+        .fetch_all(&mut conn)
+        .await?;
+    Ok(!ret.is_empty())
+}
+
+
 // Processing the `authenticate-post` called by cgit.
 async fn cmd_authenticate_post(
     matches: &ArgMatches<'_>,
@@ -170,23 +176,29 @@ async fn cmd_authenticate_post(
     // Read stdin from upstream.
     let mut buffer = String::new();
     stdin().read_to_string(&mut buffer)?;
+    log::debug!("{}", buffer);
     let data = datastructures::FormData::from(buffer);
     // Parsing user posted form.
 
-    // Authenticated via gogs.
-    if verify_login(&cfg, &data).await.is_ok() {
+    let ret = verify_login(&cfg, &data).await;
+
+    if let Err(ref e) = ret {
+        log::error!("{:?}", e)
+    }
+
+    if ret.unwrap() {
         let key = format!("{}_{}", get_current_timestamp(), rand_int());
         let value = rand_str(COOKIE_LENGTH);
 
         let redis_conn = redis::Client::open("redis://127.0.0.1/")?;
         let mut conn = redis_conn.get_async_connection().await?;
-        conn.set_ex::<_, _, i32>(format!("cgit_auth_{}", key), &value, cfg.cookie_ttl as usize).await?;
+        conn.set_ex::<_, _, String>(format!("cgit_auth_{}", key), &value, cfg.cookie_ttl as usize).await?;
 
         let cookie_value = base64::encode(format!("{};{}", key, value));
 
         let is_secure = matches
             .value_of("https")
-            .map_or(false, |x| matches!(x, "yes" | "on" | "1"));
+            .map_or(false, | x | matches!(x, "yes" | "on" | "1"));
         let domain = matches.value_of("http-host").unwrap_or("*");
         let location = matches
             .value_of("current-url")
@@ -195,7 +207,7 @@ async fn cmd_authenticate_post(
             .next()
             .unwrap();
         let cookie_suffix = if is_secure { "; secure" } else { "" };
-        println!("Status: 302 Redirect");
+        println!("Status: 302 Found");
         println!("Cache-Control: no-cache, no-store");
         println!("Location: {}", location);
         println!(
@@ -227,35 +239,65 @@ async fn cmd_body(matches: &ArgMatches<'_>, _cfg: Config) {
 }
 
 
+async fn cmd_add_user(matches: &ArgMatches<'_>, cfg: Config) -> Result<()>{
+    let user = matches.value_of("user").unwrap_or("");
+    let passwd = matches.value_of("password").unwrap_or("").to_string();
+    if user.is_empty() || passwd.is_empty() {
+        return Err(anyhow::Error::msg("Invalid user or password"))
+    }
+    let mut conn = sqlx::SqliteConnection::connect(cfg.get_database_location()).await?;
+
+    let items = sqlx::query(r#"SELECT 1 FROM "accounts" WHERE "user" = ? "#)
+        .bind(user)
+        .fetch_all(&mut conn)
+        .await?;
+
+    if ! items.is_empty() {
+        return Err(anyhow::Error::msg("User already exists!"))
+    }
+
+    sqlx::query(r#"INSERT INTO "accounts" ("user", "password") VALUES (?, ?) "#)
+        .bind(user)
+        .bind(FormData::get_string_sha256_value(&passwd)?)
+        .execute(&mut conn)
+        .await?;
+    println!("Insert {} to database", user);
+    Ok(())
+}
+
 async fn async_main(arg_matches: ArgMatches<'_>, cfg: Config) -> Result<i32>{
     match arg_matches.subcommand() {
         ("authenticate-cookie", Some(matches)) => {
-            if cmd_authenticate_cookie(matches, cfg).await.is_ok() {
-                return Ok(1)
+            if let Ok(should_pass) = cmd_authenticate_cookie(matches, cfg).await {
+                if should_pass {
+                    return Ok(1)
+                }
             }
         }
         ("authenticate-post", Some(matches)) => {
-            cmd_authenticate_post(matches, cfg).await.unwrap();
+            cmd_authenticate_post(matches, cfg).await?;
         }
         ("body", Some(matches)) => {
             cmd_body(matches, cfg).await;
         }
-        ("init", Some(matches)) => {
+        ("init", Some(_matches)) => {
             cmd_init(cfg).await?;
+        }
+        ("adduser", Some(matches)) => {
+            cmd_add_user(matches, cfg).await?;
         }
         _ => {}
     }
+    log::debug!("exit");
     Ok(0)
 }
 
-
 fn main() -> Result<()>{
-    env_logger::init();
 
-    // Prints each argument on a separate line
-    for (nth, argument) in env::args().enumerate() {
-        log::debug!("[{}]={}", nth, argument);
-    }
+    simple_logging::log_to_file("/tmp/auth.log", log::LevelFilter::Debug)?;
+
+    log::debug!("{}", env::args().collect::<Vec<String>>()
+        .join(" "));
 
     // Sub-arguments for each command, see cgi defines.
     let sub_args = &[
@@ -290,6 +332,13 @@ fn main() -> Result<()>{
                 .args(sub_args),
         )
         .subcommand(SubCommand::with_name("init").about("Init sqlite database"))
+        .subcommand(
+            SubCommand::with_name("adduser")
+                .about("Add user to database")
+                .arg(Arg::with_name("user").required(true))
+                .arg(Arg::with_name("password").required(true)),
+
+        )
         .get_matches();
 
     // Load filter configurations

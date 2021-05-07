@@ -28,6 +28,7 @@ use std::fs::read_to_string;
 const DEFAULT_CONFIG_LOCATION: &str = "/etc/cgitrc";
 const DEFAULT_COOKIE_TTL: u64 = 1200;
 const DEFAULT_DATABASE_LOCATION: &str = "/etc/cgit/auth.db";
+pub const CACHE_DIR: &str = "/var/cache/cgit";
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -97,6 +98,12 @@ impl FormData {
         Self { ..Default::default()}
     }
 
+    pub fn get_string_sha256_value(s: &str) -> Result<String> {
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(s.as_bytes());
+        Ok(format!("{:x}", hasher.finalize()))
+    }
+
     pub fn set_password(&mut self, password: String) {
         self.password = password;
         self.hash = Default::default();
@@ -111,17 +118,20 @@ impl FormData {
     }
 
     pub fn get_password_sha256(&self) -> Result<String> {
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(self.password.as_bytes());
-        Ok(format!("{:x}", hasher.finalize()))
+        Self::get_string_sha256_value(&self.password)
     }
 
     #[allow(dead_code)]
     pub fn get_password_sha256_cache(&mut self) -> Result<String> {
-        if self.hash.len() == 0 {
+        if self.hash.is_empty() {
             self.hash = self.get_password_sha256()?;
         }
         Ok(self.hash.clone())
+    }
+
+    #[allow(dead_code)]
+    pub fn get_sha256_without_calc(&self) -> &String {
+        &self.hash
     }
 }
 

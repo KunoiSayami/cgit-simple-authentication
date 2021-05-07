@@ -37,7 +37,6 @@ pub mod v1 {
     "#;
 
     pub const VERSION: &str = "1";
-
 }
-pub use v1::VERSION;
 pub use v1 as current;
+pub use v1::VERSION;
