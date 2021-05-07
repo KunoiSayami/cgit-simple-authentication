@@ -18,12 +18,12 @@
  ** along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-use sha2::Digest;
 use anyhow::Result;
-use url::form_urlencoded;
+use sha2::Digest;
 use std::borrow::Cow;
-use std::path::Path;
 use std::fs::read_to_string;
+use std::path::Path;
+use url::form_urlencoded;
 
 const DEFAULT_CONFIG_LOCATION: &str = "/etc/cgitrc";
 const DEFAULT_COOKIE_TTL: u64 = 1200;
@@ -56,10 +56,9 @@ impl Config {
         let mut cookie_ttl: u64 = DEFAULT_COOKIE_TTL;
         let mut database: &str = "/etc/cgit/auth.db";
         for line in file.lines() {
-
             let line = line.trim();
             if !line.contains('=') || !line.starts_with("cgit-simple-auth-") {
-                continue
+                continue;
             }
 
             let (key, value) = if line.contains('#') {
@@ -76,7 +75,7 @@ impl Config {
         }
         Self {
             cookie_ttl,
-            database: database.to_string()
+            database: database.to_string(),
         }
     }
 
@@ -84,7 +83,6 @@ impl Config {
         self.database.as_str()
     }
 }
-
 
 #[derive(Debug, Clone, Default)]
 pub struct FormData {
@@ -95,7 +93,9 @@ pub struct FormData {
 
 impl FormData {
     pub fn new() -> Self {
-        Self { ..Default::default()}
+        Self {
+            ..Default::default()
+        }
     }
 
     pub fn get_string_sha256_value(s: &str) -> Result<String> {
