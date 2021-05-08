@@ -35,6 +35,7 @@ pub struct Config {
     pub cookie_ttl: u64,
     database: String,
     //access_node: hashmap,
+    pub bypass_root: bool,
 }
 
 impl Default for Config {
@@ -42,6 +43,7 @@ impl Default for Config {
         Self {
             cookie_ttl: DEFAULT_COOKIE_TTL,
             database: DEFAULT_DATABASE_LOCATION.to_string(),
+            bypass_root: false,
         }
     }
 }
@@ -55,6 +57,7 @@ impl Config {
         let file = read_to_string(path).unwrap_or_default();
         let mut cookie_ttl: u64 = DEFAULT_COOKIE_TTL;
         let mut database: &str = "/etc/cgit/auth.db";
+        let mut bypass_root: bool = false;
         for line in file.lines() {
             let line = line.trim();
             if !line.contains('=') || !line.starts_with("cgit-simple-auth-") {
@@ -66,16 +69,18 @@ impl Config {
             } else {
                 line.split_once('=').unwrap()
             };
-            let key_name = key.split_once("auth-").unwrap().1;
+            let key_name = key.split_once("auth-").unwrap().1.trim();
             match key_name {
                 "cookie-ttl" => cookie_ttl = value.parse().unwrap_or(DEFAULT_COOKIE_TTL),
                 "database" => database = value,
+                "bypass-root" => bypass_root = value.to_lowercase().eq("true"),
                 _ => {}
             }
         }
         Self {
             cookie_ttl,
             database: database.to_string(),
+            bypass_root,
         }
     }
 

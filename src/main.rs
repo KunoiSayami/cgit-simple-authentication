@@ -25,6 +25,9 @@ use crate::datastructures::{Config, FormData};
 use anyhow::Result;
 use clap::{App, Arg, ArgMatches, SubCommand};
 use handlebars::Handlebars;
+use log4rs::append::file::FileAppender;
+use log4rs::config::{Appender, Root};
+use log4rs::encode::pattern::PatternEncoder;
 use rand::Rng;
 use redis::AsyncCommands;
 use serde::Serialize;
@@ -70,14 +73,19 @@ struct Meta<'a> {
     redirect: &'a str,
 }
 
-// Processing the `authenticate-basic` called by cgit.
-fn cmd_authenticate_basic(_matches: &ArgMatches, _cfg: Config) -> Result<()> {
-    unimplemented!()
-}
-
 // Processing the `authenticate-cookie` called by cgit.
 async fn cmd_authenticate_cookie(matches: &ArgMatches<'_>, cfg: Config) -> Result<bool> {
     let cookies = matches.value_of("http-cookie").unwrap_or("");
+
+    let mut bypass = false;
+
+    if cfg.bypass_root && matches.value_of("current-url").unwrap_or("").eq("/") {
+        bypass = true;
+    }
+
+    if bypass {
+        return Ok(true);
+    }
 
     if cookies.is_empty() {
         return Ok(false);
@@ -173,7 +181,7 @@ async fn cmd_authenticate_post(matches: &ArgMatches<'_>, cfg: Config) -> Result<
         log::error!("{:?}", e)
     }
 
-    if ret.unwrap() {
+    if ret.unwrap_or(false) {
         let key = format!("{}_{}", get_current_timestamp(), rand_int());
         let value = rand_str(COOKIE_LENGTH);
 
@@ -192,12 +200,7 @@ async fn cmd_authenticate_post(matches: &ArgMatches<'_>, cfg: Config) -> Result<
             .value_of("https")
             .map_or(false, |x| matches!(x, "yes" | "on" | "1"));
         let domain = matches.value_of("http-host").unwrap_or("*");
-        let location = matches
-            .value_of("current-url")
-            .unwrap_or("/")
-            .split('?')
-            .next()
-            .unwrap();
+        let location = matches.value_of("http-referer").unwrap_or("/");
         let cookie_suffix = if is_secure { "; secure" } else { "" };
         println!("Status: 302 Found");
         println!("Cache-Control: no-cache, no-store");
@@ -210,7 +213,6 @@ async fn cmd_authenticate_post(matches: &ArgMatches<'_>, cfg: Config) -> Result<
         println!("Status: 403 Forbidden");
         println!("Cache-Control: no-cache, no-store");
     }
-    println!();
 
     Ok(())
 }
@@ -265,6 +267,7 @@ async fn async_main(arg_matches: ArgMatches<'_>, cfg: Config) -> Result<i32> {
         }
         ("authenticate-post", Some(matches)) => {
             cmd_authenticate_post(matches, cfg).await?;
+            println!();
         }
         ("body", Some(matches)) => {
             cmd_body(matches, cfg).await;
@@ -277,26 +280,54 @@ async fn async_main(arg_matches: ArgMatches<'_>, cfg: Config) -> Result<i32> {
         }
         _ => {}
     }
-    log::debug!("exit");
     Ok(0)
 }
 
 fn main() -> Result<()> {
-    simple_logging::log_to_file("/tmp/auth.log", log::LevelFilter::Debug)?;
+    let logfile = FileAppender::builder()
+        .encoder(Box::new(PatternEncoder::new(
+            "{d(%H:%M:%S)}-{M}-{l} - {m}\n",
+        )))
+        .build("/tmp/output.log")?;
 
-    log::debug!("{}", env::args().collect::<Vec<String>>().join(" "));
+    let config = log4rs::Config::builder()
+        .appender(Appender::builder().build("logfile", Box::new(logfile)))
+        .logger(log4rs::config::Logger::builder().build("sqlx::query", log::LevelFilter::Warn))
+        .logger(
+            log4rs::config::Logger::builder().build("handlebars::render", log::LevelFilter::Warn),
+        )
+        .logger(
+            log4rs::config::Logger::builder().build("handlebars::context", log::LevelFilter::Warn),
+        )
+        .build(
+            Root::builder()
+                .appender("logfile")
+                .build(log::LevelFilter::Debug),
+        )?;
+
+    log4rs::init_config(config)?;
+    //simple_logging::log_to_file("/tmp/auth.log", log::LevelFilter::Debug)?;
+
+    log::debug!(
+        "{}",
+        env::args()
+            .enumerate()
+            .map(|(nth, arg)| format!("[{}]={}", nth, arg))
+            .collect::<Vec<String>>()
+            .join(" ")
+    );
 
     // Sub-arguments for each command, see cgi defines.
     let sub_args = &[
-        Arg::with_name("http-cookie").required(true),
+        Arg::with_name("http-cookie").required(true), // 2
         Arg::with_name("request-method").required(true),
         Arg::with_name("query-string").required(true),
-        Arg::with_name("http-referer").required(true),
+        Arg::with_name("http-referer").required(true), // 5
         Arg::with_name("path-info").required(true),
         Arg::with_name("http-host").required(true),
         Arg::with_name("https").required(true),
         Arg::with_name("repo").required(true),
-        Arg::with_name("page").required(true),
+        Arg::with_name("page").required(true), // 10
         Arg::with_name("current-url").required(true),
         Arg::with_name("login-url").required(true),
     ];
