@@ -283,6 +283,33 @@ async fn cmd_list_user(cfg: Config) -> Result<()> {
     Ok(())
 }
 
+async fn cmd_delete_user(matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
+    let user = matches.value_of("user").unwrap_or("");
+    if user.is_empty() {
+        return Err(anyhow::Error::msg("Please input a valid username"))
+    }
+
+    let mut conn = sqlx::SqliteConnection::connect(cfg.get_database_location()).await?;
+
+    let items = sqlx::query_as::<_, (i32,)>(r#"SELECT 1 FROM "accounts" WHERE "user" = ?"#)
+        .bind(user)
+        .fetch_all(&mut conn)
+        .await?;
+
+    if items.is_empty() {
+        return Err(anyhow::Error::msg(format!("User {} not found", user)))
+    }
+
+    sqlx::query(r#"DELETE FROM "accounts" WHERE "user" = ?"#)
+        .bind(user)
+        .execute(&mut conn)
+        .await?;
+
+    println!("Delete {} from database", user);
+
+    Ok(())
+}
+
 async fn async_main(arg_matches: ArgMatches<'_>, cfg: Config) -> Result<i32> {
     match arg_matches.subcommand() {
         ("authenticate-cookie", Some(matches)) => {
@@ -307,6 +334,9 @@ async fn async_main(arg_matches: ArgMatches<'_>, cfg: Config) -> Result<i32> {
         }
         ("users", Some(_matches)) => {
             cmd_list_user(cfg).await?;
+        }
+        ("deluser", Some(matches)) => {
+            cmd_delete_user(matches, cfg).await?;
         }
         _ => {}
     }
@@ -386,6 +416,11 @@ fn main() -> Result<()> {
                 .about("Add user to database")
                 .arg(Arg::with_name("user").required(true))
                 .arg(Arg::with_name("password").required(true)),
+        )
+        .subcommand(
+            SubCommand::with_name("deluser")
+                .about("Delete user from database")
+                .arg(Arg::with_name("user").required(true))
         )
         .get_matches();
 
