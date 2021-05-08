@@ -1,5 +1,6 @@
 # Cgit simple authentication
 
+This project is currently developing, minor version may incompatible with previous minor version.
 
 ## Source
 

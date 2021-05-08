@@ -35,6 +35,7 @@ use sqlx::Connection;
 use std::env;
 use std::io::{stdin, Read};
 use std::result::Result::Ok;
+use tokio_stream::StreamExt as _;
 
 const COOKIE_LENGTH: usize = 45;
 
@@ -256,6 +257,32 @@ async fn cmd_add_user(matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
     Ok(())
 }
 
+async fn cmd_list_user(cfg: Config) -> Result<()> {
+    let mut conn = sqlx::SqliteConnection::connect(cfg.get_database_location()).await?;
+
+    let (count,) = sqlx::query_as::<_, (i32,)>(r#"SELECT COUNT(*) FROM "accounts""#)
+        .fetch_one(&mut conn)
+        .await?;
+
+    if count > 0 {
+        let mut iter =
+            sqlx::query_as::<_, (String,)>(r#"SELECT "user" FROM "accounts""#).fetch(&mut conn);
+
+        println!(
+            "There is {} user{} in database",
+            count,
+            if count > 1 { "s" } else { "" }
+        );
+        while let Some(Ok((row,))) = iter.next().await {
+            println!("{}", row)
+        }
+    } else {
+        println!("There is not user exists.")
+    }
+
+    Ok(())
+}
+
 async fn async_main(arg_matches: ArgMatches<'_>, cfg: Config) -> Result<i32> {
     match arg_matches.subcommand() {
         ("authenticate-cookie", Some(matches)) => {
@@ -278,6 +305,9 @@ async fn async_main(arg_matches: ArgMatches<'_>, cfg: Config) -> Result<i32> {
         ("adduser", Some(matches)) => {
             cmd_add_user(matches, cfg).await?;
         }
+        ("users", Some(_matches)) => {
+            cmd_list_user(cfg).await?;
+        }
         _ => {}
     }
     Ok(0)
@@ -286,7 +316,7 @@ async fn async_main(arg_matches: ArgMatches<'_>, cfg: Config) -> Result<i32> {
 fn main() -> Result<()> {
     let logfile = FileAppender::builder()
         .encoder(Box::new(PatternEncoder::new(
-            "{d(%H:%M:%S)}-{M}-{l} - {m}\n",
+            "{d(%Y-%m-%d %H:%M:%S)}- {h({l})} - {m}{n}",
         )))
         .build("/tmp/output.log")?;
 
@@ -350,6 +380,7 @@ fn main() -> Result<()> {
                 .args(sub_args),
         )
         .subcommand(SubCommand::with_name("init").about("Init sqlite database"))
+        .subcommand(SubCommand::with_name("users").about("List all register user in database"))
         .subcommand(
             SubCommand::with_name("adduser")
                 .about("Add user to database")
