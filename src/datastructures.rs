@@ -21,7 +21,7 @@
 use anyhow::Result;
 use std::borrow::Cow;
 use std::fs::read_to_string;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use url::form_urlencoded;
 use std::fmt::Formatter;
 use rand::Rng;
@@ -35,9 +35,10 @@ use rand_core::OsRng;
 const DEFAULT_CONFIG_LOCATION: &str = "/etc/cgitrc";
 const DEFAULT_COOKIE_TTL: u64 = 1200;
 const DEFAULT_DATABASE_LOCATION: &str = "/etc/cgit/auth.db";
-//pub const CACHE_DIR: &str = "/var/cache/cgit";
+pub const CACHE_DIR: &str = "/var/cache/cgit";
 pub type RandIntType = u32;
 //pub const MINIMUM_SECRET_LENGTH: usize = 8;
+const COOKIE_LENGTH: usize = 32;
 
 pub fn get_current_timestamp() -> u64 {
     let start = std::time::SystemTime::now();
@@ -142,6 +143,14 @@ impl Config {
             ""
         }
     }*/
+
+    pub fn get_copied_database_location(&self) -> PathBuf {
+        std::path::Path::new(CACHE_DIR).join(
+            std::path::Path::new(self.get_database_location())
+                .file_name()
+                .unwrap(),
+        )
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -240,18 +249,21 @@ struct IvFile {
     timestamp: u64,
 }
 
+#[derive(Debug)]
 pub struct Cookie {
     timestamp: u64,
     randint: RandIntType,
-    body: String,
+    user: String,
+    reversed: String,
 }
 
 impl Cookie {
-    fn new(randint: RandIntType, body: &String) -> Self {
+    fn new(randint: RandIntType, user: &str) -> Self {
         Self {
             timestamp: get_current_timestamp(),
             randint,
-            body: body.clone()
+            user: user.to_string(),
+            reversed: rand_str(COOKIE_LENGTH),
         }
     }
 
@@ -269,12 +281,15 @@ impl Cookie {
 
                 let (key, value) = value.split_once(';').unwrap();
 
+                let (user, reversed) = value.split_once(";").unwrap_or(("", ""));
+
                 let (timestamp, randint) = key.split_once("_").unwrap_or(("0", ""));
 
                 cookie_self = Some(Self{
                     timestamp: timestamp.parse()?,
                     randint: randint.parse()?,
-                    body: value.to_string(),
+                    user: user.trim().to_string(),
+                    reversed: reversed.trim().to_string(),
                 });
                 break
             }
@@ -283,18 +298,30 @@ impl Cookie {
     }
 
     pub fn eq_body(&self, s: &str) -> bool {
-        self.body.eq(s)
+        self.get_body().eq(s)
     }
 
     pub fn get_key(&self) -> String {
         format!("{}_{}", self.timestamp, self.randint)
+    }
+
+    pub fn get_user(&self) -> &str {
+        self.user.as_str()
+    }
+
+    pub fn get_body(&self) -> String {
+        format!("{}; {}", self.user, self.reversed)
+    }
+
+    pub fn generate(user: &str) -> Self {
+        Self::new(rand_int(), user)
     }
 }
 
 
 impl std::fmt::Display for Cookie {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = format!("{}_{}; {}", self.timestamp, self.randint, self.body);
+        let s = format!("{}_{}; {}; {}", self.timestamp, self.randint, self.user, self.reversed);
         write!(f, "{}", base64::encode(s))
     }
 }

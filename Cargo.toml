@@ -1,6 +1,6 @@
 [package]
 name = "cgit-simple-authentication"
-version = "0.2.1"
+version = "0.3.0"
 authors = ["KunoiSayami <46131041+KunoiSayami@users.noreply.github.com>"]
 edition = "2018"
 
@@ -24,6 +24,9 @@ log4rs = "1"
 tokio-stream = "0.1"
 argon2 = "0.2"
 rand_core = "0.6"
+uuid = { version = "0.8", features = ["v4"] }
+tempdir = "0.3"
+regex = "1"
 
 [target.aarch64-unknown-linux-musl.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }
