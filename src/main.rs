@@ -1,4 +1,3 @@
-#![feature(array_methods)]
 /*
  ** Copyright (C) 2021 KunoiSayami
  **
@@ -31,7 +30,7 @@ use log4rs::config::{Appender, Root};
 use log4rs::encode::pattern::PatternEncoder;
 use redis::AsyncCommands;
 use serde::Serialize;
-use sqlx::Connection;
+use sqlx::{Connection, ConnectOptions, SqliteConnection};
 use std::env;
 use std::io::{stdin, Read};
 use std::result::Result::Ok;
@@ -39,6 +38,7 @@ use tokio_stream::StreamExt as _;
 use argon2::{
     password_hash::{PasswordHash},
 };
+use std::str::FromStr;
 
 const COOKIE_LENGTH: usize = 45;
 
@@ -100,15 +100,10 @@ async fn cmd_init(cfg: Config) -> Result<()> {
 }
 
 async fn verify_login(cfg: &Config, data: &FormData) -> Result<bool> {
-    // TODO: use timestamp to mark file diff
-    //       or copy in init process
-    let database_file_name = std::path::Path::new(datastructures::CACHE_DIR).join(
-        std::path::Path::new(cfg.get_database_location())
-            .file_name()
-            .unwrap(),
-    );
-    std::fs::copy(cfg.get_database_location(), database_file_name.clone())?;
-    let mut conn = sqlx::SqliteConnection::connect(database_file_name.to_str().unwrap()).await?;
+    let mut conn = sqlx::sqlite::SqliteConnectOptions::from_str(cfg.get_database_location())?
+        .read_only(true)
+        .log_statements(log::LevelFilter::Trace)
+        .connect().await?;
     let (passwd_hash,) = sqlx::query_as::<_, (String, )>(r#"SELECT "password" FROM "accounts" WHERE "user" = ?"#)
         .bind(data.get_user())
         .fetch_one(&mut conn)
@@ -121,6 +116,7 @@ async fn verify_login(cfg: &Config, data: &FormData) -> Result<bool> {
 async fn cmd_authenticate_post(matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
     // Read stdin from upstream.
     let mut buffer = String::new();
+    // TODO: override it that can test function from cargo test
     stdin().read_to_string(&mut buffer)?;
     log::debug!("{}", buffer);
     let data = datastructures::FormData::from(buffer);
@@ -177,7 +173,7 @@ pub struct Meta<'a> {
 
 
 // Processing the `body` called by cgit.
-async fn cmd_body(matches: &ArgMatches<'_>, cfg: Config) {
+async fn cmd_body(matches: &ArgMatches<'_>, _cfg: Config) {
     let source = include_str!("authentication_page.html");
     let handlebars = Handlebars::new();
     let meta = Meta {
@@ -197,8 +193,8 @@ async fn cmd_add_user(matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
         return Err(anyhow::Error::msg("Invalid user or password"));
     }
 
-    if user.len() > 20 {
-        return Err(anyhow::Error::msg("Username length should less than 20"))
+    if user.len() >= 20 {
+        return Err(anyhow::Error::msg("Username length should less than 21"))
     }
 
     let mut conn = sqlx::SqliteConnection::connect(cfg.get_database_location()).await?;
@@ -274,6 +270,26 @@ async fn cmd_delete_user(matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
     Ok(())
 }
 
+async fn cmd_reset_database(matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
+    if !matches.is_present("confirm") {
+        return Err(anyhow::Error::msg("Please add --confirm argument to process reset"))
+    }
+
+    let mut conn = SqliteConnection::connect(cfg.get_database_location()).await?;
+
+    sqlx::query(database::current::DROP_TABLES)
+        .execute(&mut conn)
+        .await?;
+
+    sqlx::query(database::current::CREATE_TABLES)
+        .execute(&mut conn)
+        .await?;
+
+    println!("Reset database successfully");
+
+    Ok(())
+}
+
 async fn async_main(arg_matches: ArgMatches<'_>, cfg: Config) -> Result<i32> {
     match arg_matches.subcommand() {
         ("authenticate-cookie", Some(matches)) => {
@@ -302,44 +318,15 @@ async fn async_main(arg_matches: ArgMatches<'_>, cfg: Config) -> Result<i32> {
         ("deluser", Some(matches)) => {
             cmd_delete_user(matches, cfg).await?;
         }
+        ("reset", Some(matches)) => {
+            cmd_reset_database(matches, cfg).await?;
+        }
         _ => {}
     }
     Ok(0)
 }
 
-fn main() -> Result<()> {
-    let logfile = FileAppender::builder()
-        .encoder(Box::new(PatternEncoder::new(
-            "{d(%Y-%m-%d %H:%M:%S)}- {h({l})} - {m}{n}",
-        )))
-        .build(option_env!("RUST_LOG_FILE").unwrap_or("/tmp/auth.log"))?;
-
-    let config = log4rs::Config::builder()
-        .appender(Appender::builder().build("logfile", Box::new(logfile)))
-        .logger(log4rs::config::Logger::builder().build("sqlx::query", log::LevelFilter::Warn))
-        .logger(
-            log4rs::config::Logger::builder().build("handlebars::render", log::LevelFilter::Warn),
-        )
-        .logger(
-            log4rs::config::Logger::builder().build("handlebars::context", log::LevelFilter::Warn),
-        )
-        .build(
-            Root::builder()
-                .appender("logfile")
-                .build(log::LevelFilter::Debug),
-        )?;
-
-    log4rs::init_config(config)?;
-    //simple_logging::log_to_file("/tmp/auth.log", log::LevelFilter::Debug)?;
-
-    log::debug!(
-        "{}",
-        env::args()
-            .enumerate()
-            .map(|(nth, arg)| format!("[{}]={}", nth, arg))
-            .collect::<Vec<String>>()
-            .join(" ")
-    );
+fn process_arguments(arguments: Option<Vec<&str>>) -> Result<()> {
 
     // Sub-arguments for each command, see cgi defines.
     let sub_args = &[
@@ -356,7 +343,7 @@ fn main() -> Result<()> {
         Arg::with_name("login-url").required(true),
     ];
 
-    let matches = App::new("Simple Authentication Filter for cgit")
+    let app = App::new("Simple Authentication Filter for cgit")
         .version(env!("CARGO_PKG_VERSION"))
         .subcommand(
             SubCommand::with_name("authenticate-cookie")
@@ -386,7 +373,18 @@ fn main() -> Result<()> {
                 .about("Delete user from database")
                 .arg(Arg::with_name("user").required(true))
         )
-        .get_matches();
+        .subcommand(
+            SubCommand::with_name("reset")
+                .about("Reset database")
+                .arg(Arg::with_name("confirm").long("confirm"))
+        );
+
+    let matches = if let Some(args) = arguments {
+        app.get_matches_from(args)
+    } else {
+        app.get_matches()
+    };
+
 
     // Load filter configurations
     let cfg = Config::new();
@@ -403,19 +401,54 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-mod test {
-    const PASSWORD: &str = "hunter2";
-    const ARGON2_HASH: &str = "$argon2id$v=19$m=4096,t=3,p=1$szYDnoQSVPmXq+RD2LneBw$fRETH//iCQuIX+SgjYPdZ9iIbM8gEy9fBjTJ/KFFJNM";
-    use argon2::{
-        password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
-        Argon2
-    };
-    use rand_core::OsRng;
+fn main() -> Result<()> {
+    let logfile = FileAppender::builder()
+        .encoder(Box::new(PatternEncoder::new(
+            "{d(%Y-%m-%d %H:%M:%S)}- {h({l})} - {m}{n}",
+        )))
+        .build(option_env!("RUST_LOG_FILE").unwrap_or("/tmp/auth.log"))?;
 
+    let config = log4rs::Config::builder()
+        .appender(Appender::builder().build("logfile", Box::new(logfile)))
+        //.logger(log4rs::config::Logger::builder().build("sqlx::query", log::LevelFilter::Warn))
+        .logger(
+            log4rs::config::Logger::builder().build("handlebars::render", log::LevelFilter::Warn),
+        )
+        .logger(
+            log4rs::config::Logger::builder().build("handlebars::context", log::LevelFilter::Warn),
+        )
+        .build(
+            Root::builder()
+                .appender("logfile")
+                .build(log::LevelFilter::Debug),
+        )?;
+
+    log4rs::init_config(config)?;
+    log::debug!(
+        "{}",
+        env::args()
+            .enumerate()
+            .map(|(nth, arg)| format!("[{}]={}", nth, arg))
+            .collect::<Vec<String>>()
+            .join(" ")
+    );
+
+    process_arguments(None)?;
+
+    Ok(())
+}
+
+mod test {
+    use crate::process_arguments;
 
     #[test]
     fn test_argon2() {
-        let passwd = PASSWORD.as_bytes();
+        use argon2::{
+            password_hash::{PasswordHasher, SaltString},
+            Argon2
+        };
+        use rand_core::OsRng;
+        let passwd = b"hunter2";
         let salt = SaltString::generate(&mut OsRng);
 
         let argon2 = Argon2::default();
@@ -426,10 +459,20 @@ mod test {
 
     #[test]
     fn test_argon2_verify() {
-        let passwd = PASSWORD.as_bytes();
-        let parsed_hash = PasswordHash::new(ARGON2_HASH).unwrap();
+        use argon2::{
+            password_hash::{PasswordHash, PasswordVerifier},
+            Argon2
+        };
+        let passwd = b"hunter2";
+        let parsed_hash = PasswordHash::new("$argon2id$v=19$m=4096,t=3,p=1$szYDnoQSVPmXq+RD2LneBw$fRETH//iCQuIX+SgjYPdZ9iIbM8gEy9fBjTJ/KFFJNM").unwrap();
         let argon2 = Argon2::default();
         assert!(argon2.verify_password(passwd, &parsed_hash).is_ok())
+    }
+
+    #[cfg(unix)]
+    #[allow(dead_code)]
+    fn test_auth_post() {
+        process_arguments(Some(vec!["cgit-simple-authentication", "authenticate-post", "", "POST", "p=login", "https://git.example.com/?p=login", "/", "git.example.com", "", "", "login", "/?p=login", "/?p=login"])).unwrap();
     }
 }
 

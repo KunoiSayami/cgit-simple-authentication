@@ -35,9 +35,9 @@ use rand_core::OsRng;
 const DEFAULT_CONFIG_LOCATION: &str = "/etc/cgitrc";
 const DEFAULT_COOKIE_TTL: u64 = 1200;
 const DEFAULT_DATABASE_LOCATION: &str = "/etc/cgit/auth.db";
-pub const CACHE_DIR: &str = "/var/cache/cgit";
+//pub const CACHE_DIR: &str = "/var/cache/cgit";
 pub type RandIntType = u32;
-pub const MINIMUM_SECRET_LENGTH: usize = 8;
+//pub const MINIMUM_SECRET_LENGTH: usize = 8;
 
 pub fn get_current_timestamp() -> u64 {
     let start = std::time::SystemTime::now();
@@ -100,7 +100,7 @@ impl Config {
         let mut cookie_ttl: u64 = DEFAULT_COOKIE_TTL;
         let mut database: &str = "/etc/cgit/auth.db";
         let mut bypass_root: bool = false;
-        let mut secret: &str = "";
+        //let mut secret: &str = "";
         for line in file.lines() {
             let line = line.trim();
             if !line.contains('=') || !line.starts_with("cgit-simple-auth-") {
@@ -117,7 +117,7 @@ impl Config {
                 "cookie-ttl" => cookie_ttl = value.parse().unwrap_or(DEFAULT_COOKIE_TTL),
                 "database" => database = value,
                 "bypass-root" => bypass_root = value.to_lowercase().eq("true"),
-                "secret" => secret = value,
+                //"secret" => secret = value,
                 _ => {}
             }
         }

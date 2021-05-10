@@ -36,6 +36,14 @@ pub mod v1 {
     INSERT INTO "auth_meta" VALUES ('version', '1');
     "#;
 
+    pub const DROP_TABLES: &str = r#"
+
+    DROP TABLE "accounts";
+
+    DROP TABLE "auth_meta";
+
+    "#;
+
     pub const VERSION: &str = "1";
 }
 pub use v1 as current;

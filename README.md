@@ -2,6 +2,10 @@
 
 This project is currently developing, minor version may incompatible with previous minor version.
 
+## Notice
+
+Upgrade from v0.1.x to v0.2.x should reset database due to password storage method changed.
+
 ## Source
 
 Most idea from: https://github.com/varphone/cgit-gogs-auth-filter
