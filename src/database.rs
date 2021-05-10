@@ -17,7 +17,7 @@
  ** You should have received a copy of the GNU Affero General Public License
  ** along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
-#[deprecated(since  = "0.3.0", note = "Please use v2 instead")]
+#[deprecated(since = "0.3.0", note = "Please use v2 instead")]
 #[allow(dead_code)]
 pub mod v1 {
     pub const CREATE_TABLES: &str = r#"

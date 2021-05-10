@@ -21,8 +21,9 @@
 mod database;
 mod datastructures;
 
-use crate::datastructures::{Config, FormData, Cookie};
+use crate::datastructures::{Config, Cookie, FormData};
 use anyhow::Result;
+use argon2::password_hash::PasswordHash;
 use clap::{App, Arg, ArgMatches, SubCommand};
 use handlebars::Handlebars;
 use log4rs::append::file::FileAppender;
@@ -30,19 +31,14 @@ use log4rs::config::{Appender, Root};
 use log4rs::encode::pattern::PatternEncoder;
 use redis::AsyncCommands;
 use serde::Serialize;
-use sqlx::{Connection, ConnectOptions, SqliteConnection};
+use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::{ConnectOptions, Connection, SqliteConnection};
 use std::env;
 use std::io::{stdin, Read};
 use std::result::Result::Ok;
-use tokio_stream::StreamExt as _;
-use argon2::{
-    password_hash::{PasswordHash},
-};
 use std::str::FromStr;
 use tempdir::TempDir;
-use sqlx::sqlite::SqliteConnectOptions;
-
-
+use tokio_stream::StreamExt as _;
 
 // Processing the `authenticate-cookie` called by cgit.
 async fn cmd_authenticate_cookie(matches: &ArgMatches<'_>, cfg: Config) -> Result<bool> {
@@ -66,7 +62,10 @@ async fn cmd_authenticate_cookie(matches: &ArgMatches<'_>, cfg: Config) -> Resul
     let mut conn = redis_conn.get_async_connection().await?;
 
     if let Ok(Some(cookie)) = Cookie::load_from_request(cookies) {
-        if let Ok(r) = conn.get::<_, String>(format!("cgit_auth_{}", cookie.get_key())).await{
+        if let Ok(r) = conn
+            .get::<_, String>(format!("cgit_auth_{}", cookie.get_key()))
+            .await
+        {
             if cookie.eq_body(r.as_str()) {
                 return Ok(true);
             }
@@ -104,26 +103,36 @@ async fn cmd_init(cfg: Config) -> Result<()> {
 async fn verify_login(cfg: &Config, data: &FormData, redis_conn: redis::Client) -> Result<bool> {
     // TODO: use timestamp to mark file diff
     //       or copy in init process
-    std::fs::copy(cfg.get_database_location(), cfg.get_copied_database_location())?;
+    std::fs::copy(
+        cfg.get_database_location(),
+        cfg.get_copied_database_location(),
+    )?;
 
     let mut rd = redis_conn.get_async_connection().await?;
 
-    let mut conn = sqlx::sqlite::SqliteConnectOptions::from_str(cfg.get_copied_database_location().to_str().unwrap())?
-        .journal_mode(sqlx::sqlite::SqliteJournalMode::Off)
-        .log_statements(log::LevelFilter::Trace)
-        .connect().await?;
+    let mut conn = sqlx::sqlite::SqliteConnectOptions::from_str(
+        cfg.get_copied_database_location().to_str().unwrap(),
+    )?
+    .journal_mode(sqlx::sqlite::SqliteJournalMode::Off)
+    .log_statements(log::LevelFilter::Trace)
+    .connect()
+    .await?;
 
-    let (passwd_hash, uid) = sqlx::query_as::<_, (String, String)>(r#"SELECT "password", "uid" FROM "accounts" WHERE "user" = ?"#)
-        .bind(data.get_user())
-        .fetch_one(&mut conn)
-        .await?;
+    let (passwd_hash, uid) = sqlx::query_as::<_, (String, String)>(
+        r#"SELECT "password", "uid" FROM "accounts" WHERE "user" = ?"#,
+    )
+    .bind(data.get_user())
+    .fetch_one(&mut conn)
+    .await?;
 
     let key = format!("cgit_repo_{}", data.get_user());
     if !rd.exists(&key).await? {
-        if let Some((repos, )) = sqlx::query_as::<_, (String, )>(r#"SELECT "repos" FROM "repo" WHERE "uid" = ? "#)
-            .bind(uid)
-            .fetch_optional(&mut conn)
-            .await? {
+        if let Some((repos,)) =
+            sqlx::query_as::<_, (String,)>(r#"SELECT "repos" FROM "repo" WHERE "uid" = ? "#)
+                .bind(uid)
+                .fetch_optional(&mut conn)
+                .await?
+        {
             let iter = repos.split_whitespace().collect::<Vec<&str>>();
             rd.sadd(&key, iter).await?;
         }
@@ -141,7 +150,6 @@ async fn cmd_authenticate_post(matches: &ArgMatches<'_>, cfg: Config) -> Result<
     stdin().read_to_string(&mut buffer)?;
     //log::debug!("{}", buffer);
     let data = datastructures::FormData::from(buffer);
-    // Parsing user posted form.
 
     let redis_conn = redis::Client::open("redis://127.0.0.1/")?;
 
@@ -192,7 +200,6 @@ pub struct Meta<'a> {
     //custom_warning: &'a str,
 }
 
-
 // Processing the `body` called by cgit.
 async fn cmd_body(matches: &ArgMatches<'_>, _cfg: Config) {
     let source = include_str!("authentication_page.html");
@@ -216,11 +223,13 @@ async fn cmd_add_user(matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
     }
 
     if user.len() >= 20 {
-        return Err(anyhow::Error::msg("Username length should less than 21"))
+        return Err(anyhow::Error::msg("Username length should less than 21"));
     }
 
     if !re.is_match(user) {
-        return Err(anyhow::Error::msg("Username must pass regex check\"^\\w+$\""))
+        return Err(anyhow::Error::msg(
+            "Username must pass regex check\"^\\w+$\"",
+        ));
     }
 
     let mut conn = sqlx::SqliteConnection::connect(cfg.get_database_location()).await?;
@@ -275,7 +284,7 @@ async fn cmd_list_user(cfg: Config) -> Result<()> {
 async fn cmd_delete_user(matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
     let user = matches.value_of("user").unwrap_or("");
     if user.is_empty() {
-        return Err(anyhow::Error::msg("Please input a valid username"))
+        return Err(anyhow::Error::msg("Please input a valid username"));
     }
 
     let mut conn = sqlx::SqliteConnection::connect(cfg.get_database_location()).await?;
@@ -286,7 +295,7 @@ async fn cmd_delete_user(matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
         .await?;
 
     if items.is_empty() {
-        return Err(anyhow::Error::msg(format!("User {} not found", user)))
+        return Err(anyhow::Error::msg(format!("User {} not found", user)));
     }
 
     sqlx::query(r#"DELETE FROM "accounts" WHERE "user" = ?"#)
@@ -301,7 +310,9 @@ async fn cmd_delete_user(matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
 
 async fn cmd_reset_database(matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
     if !matches.is_present("confirm") {
-        return Err(anyhow::Error::msg("Please add --confirm argument to process reset"))
+        return Err(anyhow::Error::msg(
+            "Please add --confirm argument to process reset",
+        ));
     }
 
     let mut conn = SqliteConnection::connect(cfg.get_database_location()).await?;
@@ -320,7 +331,6 @@ async fn cmd_reset_database(matches: &ArgMatches<'_>, cfg: Config) -> Result<()>
 }
 
 async fn cmd_upgrade_database(cfg: Config) -> Result<()> {
-
     let tmp_dir = TempDir::new("rolling")?;
 
     let v1_path = tmp_dir.path().join("v1.db");
@@ -336,14 +346,15 @@ async fn cmd_upgrade_database(cfg: Config) -> Result<()> {
         .connect()
         .await?;
 
-    let (v,) = sqlx::query_as::<_, (String,)>(r#"SELECT "value" FROM "auth_meta" WHERE "key" = 'version' "#)
-        .fetch_optional(&mut origin_conn)
-        .await?
-        .unwrap();
+    let (v,) = sqlx::query_as::<_, (String,)>(
+        r#"SELECT "value" FROM "auth_meta" WHERE "key" = 'version' "#,
+    )
+    .fetch_optional(&mut origin_conn)
+    .await?
+    .unwrap();
 
     #[allow(deprecated)]
     if v.eq(database::previous::VERSION) {
-
         let mut conn = SqliteConnection::connect(v2_path.as_path().to_str().unwrap()).await?;
 
         sqlx::query(database::current::CREATE_TABLES)
@@ -369,7 +380,11 @@ async fn cmd_upgrade_database(cfg: Config) -> Result<()> {
             .expect("Copy back to database location failure");
         println!("Upgrade database successful");
     } else {
-        eprintln!("Got database version {} but {} required", v, database::previous::VERSION)
+        eprintln!(
+            "Got database version {} but {} required",
+            v,
+            database::previous::VERSION
+        )
     }
     drop(origin_conn);
     tmp_dir.close()?;
@@ -417,7 +432,6 @@ async fn async_main(arg_matches: ArgMatches<'_>, cfg: Config) -> Result<i32> {
 }
 
 fn process_arguments(arguments: Option<Vec<&str>>) -> Result<()> {
-
     // Sub-arguments for each command, see cgi defines.
     let sub_args = &[
         Arg::with_name("http-cookie").required(true), // 2
@@ -461,16 +475,16 @@ fn process_arguments(arguments: Option<Vec<&str>>) -> Result<()> {
         .subcommand(
             SubCommand::with_name("deluser")
                 .about("Delete user from database")
-                .arg(Arg::with_name("user").required(true))
+                .arg(Arg::with_name("user").required(true)),
         )
         .subcommand(
             SubCommand::with_name("reset")
                 .about("Reset database")
-                .arg(Arg::with_name("confirm").long("confirm"))
+                .arg(Arg::with_name("confirm").long("confirm")),
         )
         .subcommand(
             SubCommand::with_name("upgrade")
-                .about("Upgrade database from v1(v0.1.x - v0.2.x) to v2(^v0.3.x)")
+                .about("Upgrade database from v1(v0.1.x - v0.2.x) to v2(^v0.3.x)"),
         );
 
     let matches = if let Some(args) = arguments {
@@ -478,7 +492,6 @@ fn process_arguments(arguments: Option<Vec<&str>>) -> Result<()> {
     } else {
         app.get_matches()
     };
-
 
     // Load filter configurations
     let cfg = Config::new();
@@ -538,7 +551,7 @@ mod test {
     fn test_argon2() {
         use argon2::{
             password_hash::{PasswordHasher, SaltString},
-            Argon2
+            Argon2,
         };
         use rand_core::OsRng;
         let passwd = b"hunter2";
@@ -547,14 +560,13 @@ mod test {
         let argon2 = Argon2::default();
 
         argon2.hash_password_simple(passwd, salt.as_ref()).unwrap();
-
     }
 
     #[test]
     fn test_argon2_verify() {
         use argon2::{
             password_hash::{PasswordHash, PasswordVerifier},
-            Argon2
+            Argon2,
         };
         let passwd = b"hunter2";
         let parsed_hash = PasswordHash::new("$argon2id$v=19$m=4096,t=3,p=1$szYDnoQSVPmXq+RD2LneBw$fRETH//iCQuIX+SgjYPdZ9iIbM8gEy9fBjTJ/KFFJNM").unwrap();
@@ -566,7 +578,21 @@ mod test {
     #[allow(dead_code)]
     fn test_auth_post() {
         use crate::process_arguments;
-        process_arguments(Some(vec!["cgit-simple-authentication", "authenticate-post", "", "POST", "p=login", "https://git.example.com/?p=login", "/", "git.example.com", "", "", "login", "/?p=login", "/?p=login"])).unwrap();
+        process_arguments(Some(vec![
+            "cgit-simple-authentication",
+            "authenticate-post",
+            "",
+            "POST",
+            "p=login",
+            "https://git.example.com/?p=login",
+            "/",
+            "git.example.com",
+            "",
+            "",
+            "login",
+            "/?p=login",
+            "/?p=login",
+        ]))
+        .unwrap();
     }
 }
-

@@ -19,18 +19,18 @@
  */
 
 use anyhow::Result;
+use argon2::{
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Argon2,
+};
+use rand::Rng;
+use rand_core::OsRng;
+use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::fmt::Formatter;
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 use url::form_urlencoded;
-use std::fmt::Formatter;
-use rand::Rng;
-use serde::{Serialize, Deserialize};
-use argon2::{
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
-    Argon2
-};
-use rand_core::OsRng;
 
 const DEFAULT_CONFIG_LOCATION: &str = "/etc/cgitrc";
 const DEFAULT_COOKIE_TTL: u64 = 1200;
@@ -68,8 +68,6 @@ pub fn rand_str(len: usize) -> String {
 
     password
 }
-
-
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -134,7 +132,7 @@ impl Config {
         self.database.as_str()
     }
 
-/*    pub fn get_secret_warning(&self) -> &str {
+    /*    pub fn get_secret_warning(&self) -> &str {
         if self.secret.is_empty() {
             r#"<span color="red">Warning: You should specify secret in your cgitrc file.</span>"#
         } else if self.secret.len() < MINIMUM_SECRET_LENGTH {
@@ -173,7 +171,10 @@ impl FormData {
 
         let argon2_alg = Argon2::default();
 
-        Ok(argon2_alg.hash_password_simple(passwd, salt.as_ref()).unwrap().to_string())
+        Ok(argon2_alg
+            .hash_password_simple(passwd, salt.as_ref())
+            .unwrap()
+            .to_string())
     }
 
     pub fn set_password(&mut self, password: String) {
@@ -183,7 +184,9 @@ impl FormData {
 
     pub fn verify_password(&self, password_hash: &PasswordHash) -> bool {
         let argon2_alg = Argon2::default();
-        argon2_alg.verify_password(self.password.as_bytes(), password_hash).is_ok()
+        argon2_alg
+            .verify_password(self.password.as_bytes(), password_hash)
+            .is_ok()
     }
 
     pub fn set_user(&mut self, user: String) {
@@ -285,13 +288,13 @@ impl Cookie {
 
                 let (timestamp, randint) = key.split_once("_").unwrap_or(("0", ""));
 
-                cookie_self = Some(Self{
+                cookie_self = Some(Self {
                     timestamp: timestamp.parse()?,
                     randint: randint.parse()?,
                     user: user.trim().to_string(),
                     reversed: reversed.trim().to_string(),
                 });
-                break
+                break;
             }
         }
         Ok(cookie_self)
@@ -318,10 +321,12 @@ impl Cookie {
     }
 }
 
-
 impl std::fmt::Display for Cookie {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = format!("{}_{}; {}; {}", self.timestamp, self.randint, self.user, self.reversed);
+        let s = format!(
+            "{}_{}; {}; {}",
+            self.timestamp, self.randint, self.user, self.reversed
+        );
         write!(f, "{}", base64::encode(s))
     }
 }
