@@ -1,3 +1,4 @@
+#![feature(array_methods)]
 /*
  ** Copyright (C) 2021 KunoiSayami
  **
@@ -21,14 +22,13 @@
 mod database;
 mod datastructures;
 
-use crate::datastructures::{Config, FormData};
+use crate::datastructures::{Config, FormData, get_current_timestamp, Cookie, rand_int, rand_str};
 use anyhow::Result;
 use clap::{App, Arg, ArgMatches, SubCommand};
 use handlebars::Handlebars;
 use log4rs::append::file::FileAppender;
 use log4rs::config::{Appender, Root};
 use log4rs::encode::pattern::PatternEncoder;
-use rand::Rng;
 use redis::AsyncCommands;
 use serde::Serialize;
 use sqlx::Connection;
@@ -36,43 +36,12 @@ use std::env;
 use std::io::{stdin, Read};
 use std::result::Result::Ok;
 use tokio_stream::StreamExt as _;
+use argon2::{
+    password_hash::{PasswordHash},
+};
 
 const COOKIE_LENGTH: usize = 45;
 
-fn get_current_timestamp() -> u64 {
-    let start = std::time::SystemTime::now();
-    let since_the_epoch = start
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("Time went backwards");
-    since_the_epoch.as_secs()
-}
-
-fn rand_str(len: usize) -> String {
-    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ\
-                        abcdefghijklmnopqrstuvwxyz\
-                        0123456789";
-    let mut rng = rand::thread_rng();
-
-    let password: String = (0..len)
-        .map(|_| {
-            let idx = rng.gen_range(0, CHARSET.len());
-            CHARSET[idx] as char
-        })
-        .collect();
-
-    password
-}
-
-fn rand_int() -> i32 {
-    let mut rng = rand::thread_rng();
-    rng.gen()
-}
-
-#[derive(Serialize)]
-struct Meta<'a> {
-    action: &'a str,
-    redirect: &'a str,
-}
 
 // Processing the `authenticate-cookie` called by cgit.
 async fn cmd_authenticate_cookie(matches: &ArgMatches<'_>, cfg: Config) -> Result<bool> {
@@ -95,30 +64,11 @@ async fn cmd_authenticate_cookie(matches: &ArgMatches<'_>, cfg: Config) -> Resul
     let redis_conn = redis::Client::open("redis://127.0.0.1/")?;
     let mut conn = redis_conn.get_async_connection().await?;
 
-    for cookie in cookies.split(';').map(|x| x.trim()) {
-        let (key, value) = cookie.split_once('=').unwrap();
-        if key.eq("cgit_auth") {
-            let value = base64::decode(value).unwrap_or_default();
-            let value = std::str::from_utf8(&value).unwrap_or("");
-
-            if !value.contains(';') {
-                break;
+    if let Ok(Some(cookie)) = Cookie::load_from_request(cookies) {
+        if let Ok(r) = conn.get::<_, String>(format!("cgit_auth_{}", cookie.get_key())).await{
+            if cookie.eq_body(r.as_str()) {
+                return Ok(true);
             }
-
-            let (key, value) = value.split_once(';').unwrap(); //.unwrap_or(("0_0", "0"));
-
-            let (timestamp, _) = key.split_once("_").unwrap_or(("0", ""));
-
-            if get_current_timestamp() - timestamp.parse::<u64>().unwrap_or(0) > cfg.cookie_ttl {
-                break;
-            }
-
-            if let Ok(r) = conn.get::<_, String>(format!("cgit_auth_{}", key)).await {
-                if r == value {
-                    return Ok(true);
-                }
-            }
-            break;
         }
     }
 
@@ -150,6 +100,8 @@ async fn cmd_init(cfg: Config) -> Result<()> {
 }
 
 async fn verify_login(cfg: &Config, data: &FormData) -> Result<bool> {
+    // TODO: use timestamp to mark file diff
+    //       or copy in init process
     let database_file_name = std::path::Path::new(datastructures::CACHE_DIR).join(
         std::path::Path::new(cfg.get_database_location())
             .file_name()
@@ -157,14 +109,12 @@ async fn verify_login(cfg: &Config, data: &FormData) -> Result<bool> {
     );
     std::fs::copy(cfg.get_database_location(), database_file_name.clone())?;
     let mut conn = sqlx::SqliteConnection::connect(database_file_name.to_str().unwrap()).await?;
-    let password_sha = data.get_password_sha256()?;
-    log::debug!("password: {}", password_sha);
-    let ret = sqlx::query(r#"SELECT 1 FROM "accounts" WHERE "user" = ? AND "password" = ? "#)
+    let (passwd_hash,) = sqlx::query_as::<_, (String, )>(r#"SELECT "password" FROM "accounts" WHERE "user" = ?"#)
         .bind(data.get_user())
-        .bind(password_sha)
-        .fetch_all(&mut conn)
+        .fetch_one(&mut conn)
         .await?;
-    Ok(!ret.is_empty())
+    let parsed_hash = PasswordHash::new(passwd_hash.as_str()).unwrap();
+    Ok(data.verify_password(&parsed_hash))
 }
 
 // Processing the `authenticate-post` called by cgit.
@@ -218,13 +168,22 @@ async fn cmd_authenticate_post(matches: &ArgMatches<'_>, cfg: Config) -> Result<
     Ok(())
 }
 
+#[derive(Serialize)]
+pub struct Meta<'a> {
+    action: &'a str,
+    redirect: &'a str,
+    //custom_warning: &'a str,
+}
+
+
 // Processing the `body` called by cgit.
-async fn cmd_body(matches: &ArgMatches<'_>, _cfg: Config) {
+async fn cmd_body(matches: &ArgMatches<'_>, cfg: Config) {
     let source = include_str!("authentication_page.html");
     let handlebars = Handlebars::new();
     let meta = Meta {
         action: matches.value_of("login-url").unwrap_or(""),
         redirect: matches.value_of("current-url").unwrap_or(""),
+        //custom_warning: cfg.get_secret_warning()
     };
     handlebars
         .render_template_to_write(source, &meta, std::io::stdout())
@@ -237,6 +196,11 @@ async fn cmd_add_user(matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
     if user.is_empty() || passwd.is_empty() {
         return Err(anyhow::Error::msg("Invalid user or password"));
     }
+
+    if user.len() > 20 {
+        return Err(anyhow::Error::msg("Username length should less than 20"))
+    }
+
     let mut conn = sqlx::SqliteConnection::connect(cfg.get_database_location()).await?;
 
     let items = sqlx::query(r#"SELECT 1 FROM "accounts" WHERE "user" = ? "#)
@@ -250,7 +214,7 @@ async fn cmd_add_user(matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
 
     sqlx::query(r#"INSERT INTO "accounts" ("user", "password") VALUES (?, ?) "#)
         .bind(user)
-        .bind(FormData::get_string_sha256_value(&passwd)?)
+        .bind(FormData::get_string_argon2_hash(&passwd)?)
         .execute(&mut conn)
         .await?;
     println!("Insert {} to database", user);
@@ -348,7 +312,7 @@ fn main() -> Result<()> {
         .encoder(Box::new(PatternEncoder::new(
             "{d(%Y-%m-%d %H:%M:%S)}- {h({l})} - {m}{n}",
         )))
-        .build("/tmp/output.log")?;
+        .build(option_env!("RUST_LOG_FILE").unwrap_or("/tmp/auth.log"))?;
 
     let config = log4rs::Config::builder()
         .appender(Appender::builder().build("logfile", Box::new(logfile)))
@@ -438,3 +402,34 @@ fn main() -> Result<()> {
 
     Ok(())
 }
+
+mod test {
+    const PASSWORD: &str = "hunter2";
+    const ARGON2_HASH: &str = "$argon2id$v=19$m=4096,t=3,p=1$szYDnoQSVPmXq+RD2LneBw$fRETH//iCQuIX+SgjYPdZ9iIbM8gEy9fBjTJ/KFFJNM";
+    use argon2::{
+        password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+        Argon2
+    };
+    use rand_core::OsRng;
+
+
+    #[test]
+    fn test_argon2() {
+        let passwd = PASSWORD.as_bytes();
+        let salt = SaltString::generate(&mut OsRng);
+
+        let argon2 = Argon2::default();
+
+        argon2.hash_password_simple(passwd, salt.as_ref()).unwrap();
+
+    }
+
+    #[test]
+    fn test_argon2_verify() {
+        let passwd = PASSWORD.as_bytes();
+        let parsed_hash = PasswordHash::new(ARGON2_HASH).unwrap();
+        let argon2 = Argon2::default();
+        assert!(argon2.verify_password(passwd, &parsed_hash).is_ok())
+    }
+}
+

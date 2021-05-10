@@ -39,9 +39,6 @@ jobs:
           elif [ "$RUNNER_OS" == "macOS" ]; then
             BIN='cgit-simple-authentication_darwin_amd64'
             mv target/release/cgit-simple-authentication target/release/$BIN
-          else
-            BIN='cgit-simple-authentication_windows_amd64.exe'
-            mv target/release/cgit-simple-authentication.exe target/release/$BIN
           fi
           echo "::set-output name=bin::target/release/$BIN"
       - uses: actions/upload-artifact@v2
