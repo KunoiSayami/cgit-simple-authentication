@@ -38,7 +38,7 @@ const DEFAULT_DATABASE_LOCATION: &str = "/etc/cgit/auth.db";
 pub const CACHE_DIR: &str = "/var/cache/cgit";
 pub type RandIntType = u32;
 //pub const MINIMUM_SECRET_LENGTH: usize = 8;
-const COOKIE_LENGTH: usize = 32;
+pub const COOKIE_LENGTH: usize = 32;
 
 pub fn get_current_timestamp() -> u64 {
     let start = std::time::SystemTime::now();
@@ -76,6 +76,7 @@ pub struct Config {
     //access_node: hashmap,
     pub bypass_root: bool,
     //secret: String,
+    pub(crate) test: bool,
 }
 
 impl Default for Config {
@@ -85,6 +86,7 @@ impl Default for Config {
             database: DEFAULT_DATABASE_LOCATION.to_string(),
             bypass_root: false,
             //secret: Default::default(),
+            test: false,
         }
     }
 }
@@ -124,6 +126,7 @@ impl Config {
             cookie_ttl,
             database: database.to_string(),
             bypass_root,
+            test: false,
             //secret: secret.to_string(),
         }
     }
@@ -143,11 +146,24 @@ impl Config {
     }*/
 
     pub fn get_copied_database_location(&self) -> PathBuf {
+        if self.test {
+            return PathBuf::from(self.database.as_str())
+        }
+
         std::path::Path::new(CACHE_DIR).join(
             std::path::Path::new(self.get_database_location())
                 .file_name()
                 .unwrap(),
         )
+    }
+
+    pub(crate) fn generate_test_config() -> Self {
+        Self {
+            database: "test/tmp.db".to_string(),
+            bypass_root: false,
+            cookie_ttl: DEFAULT_COOKIE_TTL,
+            test: true,
+        }
     }
 }
 

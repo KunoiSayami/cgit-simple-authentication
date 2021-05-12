@@ -34,11 +34,73 @@ use serde::Serialize;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection, SqliteConnection};
 use std::env;
-use std::io::{stdin, Read};
+use std::io::{BufRead, Write};
 use std::result::Result::Ok;
 use std::str::FromStr;
 use tempdir::TempDir;
 use tokio_stream::StreamExt as _;
+
+
+struct IOModule<R, W> {
+    reader: R,
+    writer: W,
+}
+
+impl<R: BufRead, W: Write> IOModule<R, W> {
+    // Processing the `authenticate-post` called by cgit.
+    async fn cmd_authenticate_post(&mut self, matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
+        // Read stdin from upstream.
+        let mut buffer = String::new();
+        // TODO: override it that can test function from cargo test
+        self.reader.read_to_string(&mut buffer)?;
+        //log::debug!("{}", buffer);
+        let data = datastructures::FormData::from(buffer);
+
+        let redis_conn = redis::Client::open("redis://127.0.0.1/")?;
+
+        let ret = verify_login(&cfg, &data, redis_conn.clone()).await;
+
+        if let Err(ref e) = ret {
+            eprintln!("{:?}", e);
+            log::error!("{:?}", e)
+        }
+
+        if ret.unwrap_or(false) {
+            let cookie = Cookie::generate(data.get_user());
+            let mut conn = redis_conn.get_async_connection().await?;
+
+            conn.set_ex::<_, _, String>(
+                format!("cgit_auth_{}", cookie.get_key()),
+                cookie.get_body(),
+                cfg.cookie_ttl as usize,
+            )
+                .await?;
+
+            let cookie_value = cookie.to_string();
+
+            let is_secure = matches
+                .value_of("https")
+                .map_or(false, |x| matches!(x, "yes" | "on" | "1"));
+            let domain = matches.value_of("http-host").unwrap_or("*");
+            let location = matches.value_of("http-referer").unwrap_or("/");
+            let cookie_suffix = if is_secure { "; secure" } else { "" };
+            writeln!(&mut self.writer, "Status: 302 Found")?;
+            writeln!(&mut self.writer, "Cache-Control: no-cache, no-store")?;
+            writeln!(&mut self.writer, "Location: {}", location)?;
+            writeln!(&mut self.writer,
+                "Set-Cookie: cgit_auth={}; Domain={}; Max-Age={}; HttpOnly{}",
+                cookie_value, domain, cfg.cookie_ttl, cookie_suffix
+            )?;
+        } else {
+            writeln!(&mut self.writer, "Status: 403 Forbidden")?;
+            writeln!(&mut self.writer, "Cache-Control: no-cache, no-store")?;
+        }
+
+        writeln!(&mut self.writer)?;
+        Ok(())
+    }
+
+}
 
 // Processing the `authenticate-cookie` called by cgit.
 async fn cmd_authenticate_cookie(matches: &ArgMatches<'_>, cfg: Config) -> Result<bool> {
@@ -77,46 +139,53 @@ async fn cmd_authenticate_cookie(matches: &ArgMatches<'_>, cfg: Config) -> Resul
 }
 
 async fn cmd_init(cfg: Config) -> Result<()> {
-    log::trace!("{}", cfg.get_database_location());
     let loc = std::path::Path::new(cfg.get_database_location());
-    if !loc.exists() {
+    let exists = loc.exists();
+    if !exists {
         std::fs::File::create(loc)?;
     }
 
     let mut conn = sqlx::SqliteConnection::connect(cfg.get_database_location()).await?;
 
-    let rows = sqlx::query(r#"SELECT name FROM sqlite_master WHERE type='table' AND name=?"#)
-        .bind("auth_meta")
-        .fetch_all(&mut conn)
-        .await?;
-
-    if rows.is_empty() {
-        sqlx::query(database::current::CREATE_TABLES)
-            .execute(&mut conn)
+    if exists {
+        let rows = sqlx::query(r#"SELECT name FROM sqlite_master WHERE type='table' AND name=?"#)
+            .bind("auth_meta")
+            .fetch_all(&mut conn)
             .await?;
-        log::info!("Initialize the database successfully");
+
+        if !rows.is_empty() {
+            return Ok(())
+        }
     }
 
+    sqlx::query(database::current::CREATE_TABLES)
+        .execute(&mut conn)
+        .await?;
+    println!("Initialize the database successfully");
+
+    drop(conn);
     Ok(())
 }
 
 async fn verify_login(cfg: &Config, data: &FormData, redis_conn: redis::Client) -> Result<bool> {
     // TODO: use timestamp to mark file diff
     //       or copy in init process
-    std::fs::copy(
-        cfg.get_database_location(),
-        cfg.get_copied_database_location(),
-    )?;
+    if cfg.test {
+        std::fs::copy(
+            cfg.get_database_location(),
+            cfg.get_copied_database_location(),
+        )?;
+    }
 
     let mut rd = redis_conn.get_async_connection().await?;
 
     let mut conn = sqlx::sqlite::SqliteConnectOptions::from_str(
         cfg.get_copied_database_location().to_str().unwrap(),
     )?
-    .journal_mode(sqlx::sqlite::SqliteJournalMode::Off)
-    .log_statements(log::LevelFilter::Trace)
-    .connect()
-    .await?;
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Off)
+        .log_statements(log::LevelFilter::Trace)
+        .connect()
+        .await?;
 
     let (passwd_hash, uid) = sqlx::query_as::<_, (String, String)>(
         r#"SELECT "password", "uid" FROM "accounts" WHERE "user" = ?"#,
@@ -140,57 +209,6 @@ async fn verify_login(cfg: &Config, data: &FormData, redis_conn: redis::Client) 
 
     let parsed_hash = PasswordHash::new(passwd_hash.as_str()).unwrap();
     Ok(data.verify_password(&parsed_hash))
-}
-
-// Processing the `authenticate-post` called by cgit.
-async fn cmd_authenticate_post(matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
-    // Read stdin from upstream.
-    let mut buffer = String::new();
-    // TODO: override it that can test function from cargo test
-    stdin().read_to_string(&mut buffer)?;
-    //log::debug!("{}", buffer);
-    let data = datastructures::FormData::from(buffer);
-
-    let redis_conn = redis::Client::open("redis://127.0.0.1/")?;
-
-    let ret = verify_login(&cfg, &data, redis_conn.clone()).await;
-
-    if let Err(ref e) = ret {
-        log::error!("{:?}", e)
-    }
-
-    if ret.unwrap_or(false) {
-        let cookie = Cookie::generate(data.get_user());
-        let mut conn = redis_conn.get_async_connection().await?;
-
-        conn.set_ex::<_, _, String>(
-            format!("cgit_auth_{}", cookie.get_key()),
-            cookie.get_body(),
-            cfg.cookie_ttl as usize,
-        )
-        .await?;
-
-        let cookie_value = cookie.to_string();
-
-        let is_secure = matches
-            .value_of("https")
-            .map_or(false, |x| matches!(x, "yes" | "on" | "1"));
-        let domain = matches.value_of("http-host").unwrap_or("*");
-        let location = matches.value_of("http-referer").unwrap_or("/");
-        let cookie_suffix = if is_secure { "; secure" } else { "" };
-        println!("Status: 302 Found");
-        println!("Cache-Control: no-cache, no-store");
-        println!("Location: {}", location);
-        println!(
-            "Set-Cookie: cgit_auth={}; Domain={}; Max-Age={}; HttpOnly{}",
-            cookie_value, domain, cfg.cookie_ttl, cookie_suffix
-        );
-    } else {
-        println!("Status: 403 Forbidden");
-        println!("Cache-Control: no-cache, no-store");
-    }
-
-    Ok(())
 }
 
 #[derive(Serialize)]
@@ -251,7 +269,10 @@ async fn cmd_add_user(matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
         .bind(&uid)
         .execute(&mut conn)
         .await?;
+
     println!("Insert {} ({}) to database", user, uid);
+
+    drop(conn);
     Ok(())
 }
 
@@ -392,7 +413,12 @@ async fn cmd_upgrade_database(cfg: Config) -> Result<()> {
     Ok(())
 }
 
-async fn async_main(arg_matches: ArgMatches<'_>, cfg: Config) -> Result<i32> {
+async fn async_main(arg_matches: ArgMatches<'_>) -> Result<i32> {
+    let cfg = if std::env::args().any(|x| x.eq("--test")) {
+        Config::generate_test_config()
+    } else {
+        Config::new()
+    };
     match arg_matches.subcommand() {
         ("authenticate-cookie", Some(matches)) => {
             if let Ok(should_pass) = cmd_authenticate_cookie(matches, cfg).await {
@@ -402,8 +428,15 @@ async fn async_main(arg_matches: ArgMatches<'_>, cfg: Config) -> Result<i32> {
             }
         }
         ("authenticate-post", Some(matches)) => {
-            cmd_authenticate_post(matches, cfg).await?;
-            println!();
+            let stdin = std::io::stdin();
+            let input = stdin.lock();
+
+            let output = std::io::stdout();
+            let mut module = IOModule {
+                reader: input,
+                writer: output
+            };
+            module.cmd_authenticate_post(matches, cfg).await?;
         }
         ("body", Some(matches)) => {
             cmd_body(matches, cfg).await;
@@ -431,7 +464,8 @@ async fn async_main(arg_matches: ArgMatches<'_>, cfg: Config) -> Result<i32> {
     Ok(0)
 }
 
-fn process_arguments(arguments: Option<Vec<&str>>) -> Result<()> {
+fn get_arg_matches(arguments: Option<Vec<&str>>) -> ArgMatches {
+
     // Sub-arguments for each command, see cgi defines.
     let sub_args = &[
         Arg::with_name("http-cookie").required(true), // 2
@@ -493,14 +527,16 @@ fn process_arguments(arguments: Option<Vec<&str>>) -> Result<()> {
         app.get_matches()
     };
 
-    // Load filter configurations
-    let cfg = Config::new();
+    matches
+}
+
+fn process_arguments() -> Result<()> {
 
     let ret = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap()
-        .block_on(async_main(matches, cfg))?;
+        .block_on(async_main(get_arg_matches(None)))?;
     if ret == 1 {
         std::process::exit(1);
     }
@@ -540,19 +576,32 @@ fn main() -> Result<()> {
             .join(" ")
     );
 
-    process_arguments(None)?;
+    process_arguments()?;
 
     Ok(())
 }
 
+#[cfg(test)]
 mod test {
+    use crate::{cmd_init, cmd_add_user};
+    use std::path::PathBuf;
+    use argon2::{
+        password_hash::{PasswordHash, PasswordVerifier, PasswordHasher, SaltString},
+        Argon2,
+    };
+    use crate::{IOModule, get_arg_matches};
+    use crate::datastructures::{Config, rand_str};
+    use redis::AsyncCommands;
+    use std::time::Duration;
+    use std::thread::sleep;
+    use std::path::Path;
+
+    fn check_if_test_sqlite_only() -> bool {
+        std::env::var("TEST_SQLITE").is_ok()
+    }
 
     #[test]
-    fn test_argon2() {
-        use argon2::{
-            password_hash::{PasswordHasher, SaltString},
-            Argon2,
-        };
+    fn test_0_argon2() {
         use rand_core::OsRng;
         let passwd = b"hunter2";
         let salt = SaltString::generate(&mut OsRng);
@@ -563,23 +612,49 @@ mod test {
     }
 
     #[test]
-    fn test_argon2_verify() {
-        use argon2::{
-            password_hash::{PasswordHash, PasswordVerifier},
-            Argon2,
-        };
+    fn test_0_argon2_verify() {
         let passwd = b"hunter2";
         let parsed_hash = PasswordHash::new("$argon2id$v=19$m=4096,t=3,p=1$szYDnoQSVPmXq+RD2LneBw$fRETH//iCQuIX+SgjYPdZ9iIbM8gEy9fBjTJ/KFFJNM").unwrap();
         let argon2 = Argon2::default();
         assert!(argon2.verify_password(passwd, &parsed_hash).is_ok())
     }
 
-    #[cfg(unix)]
-    #[allow(dead_code)]
-    fn test_auth_post() {
-        use crate::process_arguments;
-        process_arguments(Some(vec![
-            "cgit-simple-authentication",
+    async fn async_test_redis() -> anyhow::Result<()> {
+        let redis_conn = redis::Client::open("redis://127.0.0.1/")?;
+        let mut conn = redis_conn.get_async_connection().await?;
+
+        let s = rand_str(crate::datastructures::COOKIE_LENGTH);
+        conn.set_ex::<_, _, String>("auth_test", &s, 60).await?;
+
+        assert!(conn.exists::<_, bool>("auth_test").await?);
+
+        assert_eq!(conn.get::<_, String>("auth_test").await?, s);
+
+        conn.del("auth_test").await?;
+
+        assert_eq!(conn.exists::<_, bool>("auth_test").await?, false);
+        Ok(())
+    }
+
+    #[test]
+    fn test_0_redis() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async_test_redis())
+            .unwrap();
+    }
+
+    fn write_test_result_to_redis() {
+
+    }
+
+    fn test_auth_post() -> String {
+
+        let correct_input = br#"redirect=/&username=hunter2&password=hunter2"#;
+        let matches = get_arg_matches(Some(vec![
+            "a",
             "authenticate-post",
             "",
             "POST",
@@ -592,7 +667,107 @@ mod test {
             "login",
             "/?p=login",
             "/?p=login",
-        ]))
-        .unwrap();
+        ]));
+        let mut output = Vec::new();
+        let mut module = IOModule {
+            reader: &correct_input[..],
+            writer: &mut output,
+        };
+
+        let cfg = Config::generate_test_config();
+
+        match matches.subcommand() {
+            ("authenticate-post", Some(matches)) => {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(module.cmd_authenticate_post(matches, cfg))
+                    .unwrap()
+            }
+            _ => {}
+        }
+
+        String::from_utf8(output).unwrap()
+
     }
+
+
+    #[test]
+    fn test_auth_failure() {
+        if check_if_test_sqlite_only() {
+            return
+        }
+        let out = test_auth_post();
+        assert!(out.starts_with("Status: 403"))
+    }
+
+    #[test]
+    fn test_0_init_database() {
+        if !check_if_test_sqlite_only() {
+            return
+        }
+        let tmp_dir = Path::new("test");
+        use crate::datastructures::Config;
+
+        if tmp_dir.exists() {
+            std::fs::remove_dir_all(tmp_dir).unwrap();
+        }
+        std::fs::create_dir(tmp_dir).unwrap();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(cmd_init(Config::generate_test_config()))
+            .unwrap();
+    }
+
+
+    fn lock(path: &std::path::PathBuf, sleep_length: usize) {
+        for _ in 0..sleep_length {
+            sleep(Duration::from_secs(1));
+            if path.exists() {
+                break
+            }
+        }
+
+        if !path.exists() {
+            panic!("Can't get lock from {}", path.to_str().unwrap())
+        }
+    }
+
+    #[test]
+    fn test_1_insert_user() {
+        if !check_if_test_sqlite_only() {
+            return
+        }
+        lock(&PathBuf::from("test/tmp.db"), 3);
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let matches = crate::get_arg_matches(Some(vec!["a", "adduser", "hunter2", "hunter2"]));
+        match matches.subcommand() {
+            ("adduser", Some(matches)) => {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(cmd_add_user(matches, Config::generate_test_config()))
+                    .unwrap();
+                std::fs::File::create("test/USER_WRITTEN").unwrap();
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn test_auth_pass() {
+        if check_if_test_sqlite_only() {
+            return
+        }
+        let s = test_auth_post();
+
+        println!("{}", s);
+        assert!(s.starts_with("Status: 302"))
+
+    }
+
 }
