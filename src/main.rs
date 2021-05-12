@@ -595,6 +595,7 @@ mod test {
     use std::time::Duration;
     use std::thread::sleep;
     use std::path::Path;
+    const DEFAULT_ADD_USER_ARGS: &[&str] = &["adduser", "hunter2", "hunter2", "--test"];
 
     fn check_if_test_sqlite_only() -> bool {
         std::env::var("TEST_SQLITE").is_ok()
@@ -714,12 +715,13 @@ mod test {
             std::fs::remove_dir_all(tmp_dir).unwrap();
         }
         std::fs::create_dir(tmp_dir).unwrap();
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
+        let s = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("init --test")
+            .spawn()
             .unwrap()
-            .block_on(cmd_init(Config::generate_test_config()))
-            .unwrap();
+            .wait()
+            .unwrap()
+            .success();
     }
 
 
@@ -743,19 +745,14 @@ mod test {
         }
         lock(&PathBuf::from("test/tmp.db"), 3);
         std::thread::sleep(std::time::Duration::from_secs(1));
-        let matches = crate::get_arg_matches(Some(vec!["a", "adduser", "hunter2", "hunter2"]));
-        match matches.subcommand() {
-            ("adduser", Some(matches)) => {
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .unwrap()
-                    .block_on(cmd_add_user(matches, Config::generate_test_config()))
-                    .unwrap();
-                std::fs::File::create("test/USER_WRITTEN").unwrap();
-            }
-            _ => {}
-        }
+        let s = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(DEFAULT_ADD_USER_ARGS)
+            .spawn()
+            .unwrap()
+            .wait()
+            .unwrap()
+            .success();
+        assert!(s);
     }
 
     #[test]
