@@ -88,8 +88,8 @@ impl<R: BufRead, W: Write> IOModule<R, W> {
             writeln!(&mut self.writer, "Cache-Control: no-cache, no-store")?;
             writeln!(&mut self.writer, "Location: {}", location)?;
             writeln!(&mut self.writer,
-                "Set-Cookie: cgit_auth={}; Domain={}; Max-Age={}; HttpOnly{}",
-                cookie_value, domain, cfg.cookie_ttl, cookie_suffix
+                     "Set-Cookie: cgit_auth={}; Domain={}; Max-Age={}; HttpOnly{}",
+                     cookie_value, domain, cfg.cookie_ttl, cookie_suffix
             )?;
         } else {
             writeln!(&mut self.writer, "Status: 403 Forbidden")?;
@@ -190,17 +190,17 @@ async fn verify_login(cfg: &Config, data: &FormData, redis_conn: redis::Client) 
     let (passwd_hash, uid) = sqlx::query_as::<_, (String, String)>(
         r#"SELECT "password", "uid" FROM "accounts" WHERE "user" = ?"#,
     )
-    .bind(data.get_user())
-    .fetch_one(&mut conn)
-    .await?;
+        .bind(data.get_user())
+        .fetch_one(&mut conn)
+        .await?;
 
     let key = format!("cgit_repo_{}", data.get_user());
     if !rd.exists(&key).await? {
         if let Some((repos,)) =
-            sqlx::query_as::<_, (String,)>(r#"SELECT "repos" FROM "repo" WHERE "uid" = ? "#)
-                .bind(uid)
-                .fetch_optional(&mut conn)
-                .await?
+        sqlx::query_as::<_, (String,)>(r#"SELECT "repos" FROM "repo" WHERE "uid" = ? "#)
+            .bind(uid)
+            .fetch_optional(&mut conn)
+            .await?
         {
             let iter = repos.split_whitespace().collect::<Vec<&str>>();
             rd.sadd(&key, iter).await?;
@@ -370,9 +370,9 @@ async fn cmd_upgrade_database(cfg: Config) -> Result<()> {
     let (v,) = sqlx::query_as::<_, (String,)>(
         r#"SELECT "value" FROM "auth_meta" WHERE "key" = 'version' "#,
     )
-    .fetch_optional(&mut origin_conn)
-    .await?
-    .unwrap();
+        .fetch_optional(&mut origin_conn)
+        .await?
+        .unwrap();
 
     #[allow(deprecated)]
     if v.eq(database::previous::VERSION) {
@@ -498,17 +498,13 @@ fn get_arg_matches(arguments: Option<Vec<&str>>) -> ArgMatches {
                 .about("Return the login form")
                 .args(sub_args),
         )
-        .subcommand(
-            SubCommand::with_name("init").about("Init sqlite database")
-                .arg(Arg::with_name("test").long("--test")),
-        )
+        .subcommand(SubCommand::with_name("init").about("Init sqlite database"))
         .subcommand(SubCommand::with_name("users").about("List all register user in database"))
         .subcommand(
             SubCommand::with_name("adduser")
                 .about("Add user to database")
                 .arg(Arg::with_name("user").required(true))
-                .arg(Arg::with_name("password").required(true))
-                .arg(Arg::with_name("test").long("--test")),
+                .arg(Arg::with_name("password").required(true)),
         )
         .subcommand(
             SubCommand::with_name("deluser")
@@ -587,17 +583,22 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod test {
+    use crate::{cmd_init, cmd_add_user};
+    use std::path::PathBuf;
     use argon2::{
         password_hash::{PasswordHash, PasswordVerifier, PasswordHasher, SaltString},
         Argon2,
     };
-    use rand_core::OsRng;
     use crate::{IOModule, get_arg_matches};
     use crate::datastructures::{Config, rand_str};
     use redis::AsyncCommands;
+    use std::time::Duration;
+    use std::thread::sleep;
+    use std::path::Path;
 
     #[test]
-    fn test_0_argon2() {
+    fn test_argon2() {
+        use rand_core::OsRng;
         let passwd = b"hunter2";
         let salt = SaltString::generate(&mut OsRng);
 
@@ -607,7 +608,7 @@ mod test {
     }
 
     #[test]
-    fn test_0_argon2_verify() {
+    fn test_argon2_verify() {
         let passwd = b"hunter2";
         let parsed_hash = PasswordHash::new("$argon2id$v=19$m=4096,t=3,p=1$szYDnoQSVPmXq+RD2LneBw$fRETH//iCQuIX+SgjYPdZ9iIbM8gEy9fBjTJ/KFFJNM").unwrap();
         let argon2 = Argon2::default();
@@ -632,7 +633,7 @@ mod test {
     }
 
     #[test]
-    fn test_0_redis() {
+    fn test_redis() {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -689,18 +690,70 @@ mod test {
 
 
     #[test]
-    fn test_auth_failure() {
+    fn test_1_auth_failure() {
         let out = test_auth_post();
         assert!(out.starts_with("Status: 403"))
     }
 
+    #[test]
+    fn test_0_init_database() {
+        let tmp_dir = Path::new("test");
+
+        if tmp_dir.exists() {
+            std::fs::remove_dir_all(tmp_dir).unwrap();
+        }
+        std::fs::create_dir(tmp_dir).unwrap();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(cmd_init(Config::generate_test_config()))
+            .unwrap();
+        std::fs::File::create("test/DATABASE_INITED").unwrap();
+    }
+
+
+    fn lock(path: &std::path::PathBuf, sleep_length: usize) {
+        for _ in 0..(sleep_length * 100) {
+            sleep(Duration::from_millis(10));
+            if path.exists() {
+                break
+            }
+        }
+
+        if !path.exists() {
+            panic!("Can't get lock from {}", path.to_str().unwrap())
+        }
+    }
 
     #[test]
-    fn test_auth_pass() {
+    fn test_2_insert_user() {
+        lock(&PathBuf::from("test/DATABASE_INITED"), 3);
+        let matches = crate::get_arg_matches(Some(vec!["a", "adduser", "hunter2", "hunter2"]));
+        match matches.subcommand() {
+            ("adduser", Some(matches)) => {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(cmd_add_user(matches, Config::generate_test_config()))
+                    .unwrap();
+                std::fs::File::create("test/USER_WRITTEN").unwrap();
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn test_3_auth_pass() {
+
+        lock(&PathBuf::from("test/USER_WRITTEN"), 15);
+
         let s = test_auth_post();
 
         println!("{}", s);
         assert!(s.starts_with("Status: 302"))
+
     }
 
 }
