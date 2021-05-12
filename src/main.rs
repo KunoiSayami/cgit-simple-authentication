@@ -170,7 +170,7 @@ async fn cmd_init(cfg: Config) -> Result<()> {
 async fn verify_login(cfg: &Config, data: &FormData, redis_conn: redis::Client) -> Result<bool> {
     // TODO: use timestamp to mark file diff
     //       or copy in init process
-    if cfg.test {
+    if !cfg.test {
         std::fs::copy(
             cfg.get_database_location(),
             cfg.get_copied_database_location(),
@@ -498,13 +498,17 @@ fn get_arg_matches(arguments: Option<Vec<&str>>) -> ArgMatches {
                 .about("Return the login form")
                 .args(sub_args),
         )
-        .subcommand(SubCommand::with_name("init").about("Init sqlite database"))
+        .subcommand(
+            SubCommand::with_name("init").about("Init sqlite database")
+                .arg(Arg::with_name("test").long("--test")),
+        )
         .subcommand(SubCommand::with_name("users").about("List all register user in database"))
         .subcommand(
             SubCommand::with_name("adduser")
                 .about("Add user to database")
                 .arg(Arg::with_name("user").required(true))
-                .arg(Arg::with_name("password").required(true)),
+                .arg(Arg::with_name("password").required(true))
+                .arg(Arg::with_name("test").long("--test")),
         )
         .subcommand(
             SubCommand::with_name("deluser")
@@ -583,27 +587,17 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod test {
-    use crate::{cmd_init, cmd_add_user};
-    use std::path::PathBuf;
     use argon2::{
         password_hash::{PasswordHash, PasswordVerifier, PasswordHasher, SaltString},
         Argon2,
     };
+    use rand_core::OsRng;
     use crate::{IOModule, get_arg_matches};
     use crate::datastructures::{Config, rand_str};
     use redis::AsyncCommands;
-    use std::time::Duration;
-    use std::thread::sleep;
-    use std::path::Path;
-    const DEFAULT_ADD_USER_ARGS: &[&str] = &["adduser", "hunter2", "hunter2", "--test"];
-
-    fn check_if_test_sqlite_only() -> bool {
-        std::env::var("TEST_SQLITE").is_ok()
-    }
 
     #[test]
     fn test_0_argon2() {
-        use rand_core::OsRng;
         let passwd = b"hunter2";
         let salt = SaltString::generate(&mut OsRng);
 
@@ -696,75 +690,17 @@ mod test {
 
     #[test]
     fn test_auth_failure() {
-        if check_if_test_sqlite_only() {
-            return
-        }
         let out = test_auth_post();
         assert!(out.starts_with("Status: 403"))
     }
 
-    #[test]
-    fn test_0_init_database() {
-        if !check_if_test_sqlite_only() {
-            return
-        }
-        let tmp_dir = Path::new("test");
-        use crate::datastructures::Config;
-
-        if tmp_dir.exists() {
-            std::fs::remove_dir_all(tmp_dir).unwrap();
-        }
-        std::fs::create_dir(tmp_dir).unwrap();
-        let s = std::process::Command::new(std::env::current_exe().unwrap())
-            .arg("init --test")
-            .spawn()
-            .unwrap()
-            .wait()
-            .unwrap()
-            .success();
-    }
-
-
-    fn lock(path: &std::path::PathBuf, sleep_length: usize) {
-        for _ in 0..sleep_length {
-            sleep(Duration::from_secs(1));
-            if path.exists() {
-                break
-            }
-        }
-
-        if !path.exists() {
-            panic!("Can't get lock from {}", path.to_str().unwrap())
-        }
-    }
-
-    #[test]
-    fn test_1_insert_user() {
-        if !check_if_test_sqlite_only() {
-            return
-        }
-        lock(&PathBuf::from("test/tmp.db"), 3);
-        std::thread::sleep(std::time::Duration::from_secs(1));
-        let s = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(DEFAULT_ADD_USER_ARGS)
-            .spawn()
-            .unwrap()
-            .wait()
-            .unwrap()
-            .success();
-        assert!(s);
-    }
 
     #[test]
     fn test_auth_pass() {
-        if check_if_test_sqlite_only() {
-            return
-        }
         let s = test_auth_post();
 
         println!("{}", s);
         assert!(s.starts_with("Status: 302"))
-
     }
 
 }

@@ -1,6 +1,6 @@
 [package]
 name = "cgit-simple-authentication"
-version = "0.3.3"
+version = "0.3.4"
 authors = ["KunoiSayami <46131041+KunoiSayami@users.noreply.github.com>"]
 edition = "2018"
 
