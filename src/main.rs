@@ -50,7 +50,6 @@ impl<R: BufRead, W: Write> IOModule<R, W> {
     async fn cmd_authenticate_post(&mut self, matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
         // Read stdin from upstream.
         let mut buffer = String::new();
-        // TODO: override it that can test function from cargo test
         self.reader.read_to_string(&mut buffer)?;
         //log::debug!("{}", buffer);
         let data = datastructures::FormData::from(buffer);
@@ -590,14 +589,14 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod test {
     use crate::datastructures::{rand_str, Config};
-    use crate::{cmd_add_user, cmd_init};
+    use crate::{cmd_add_user, cmd_init, cmd_authenticate_cookie};
     use crate::{get_arg_matches, IOModule};
     use argon2::{
         password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
         Argon2,
     };
     use redis::AsyncCommands;
-    use std::io::Write;
+    use std::io::{Read, Write};
     use std::path::Path;
     use std::path::PathBuf;
     use std::thread::sleep;
@@ -745,7 +744,7 @@ mod test {
 
     #[test]
     fn test_3_auth_pass() {
-        lock(&PathBuf::from("test/USER_WRITTEN"), 15);
+        lock(&PathBuf::from("test/USER_WRITTEN"), 7);
 
         let s = test_auth_post();
 
@@ -759,5 +758,58 @@ mod test {
         assert!(s.starts_with("Status: 302"));
         assert!(s.ends_with("\n\n"));
         assert!(!Path::new("test/COPIED").exists());
+    }
+
+    #[test]
+    fn test_4_authenticate_cookie() {
+        lock(&PathBuf::from("test/RESPONSE"), 15);
+        let mut buffer = String::new();
+
+        let mut file = std::fs::File::open("test/RESPONSE").unwrap();
+        file.read_to_string(&mut buffer).unwrap();
+
+        let buffer = buffer;
+
+        let mut cookie = "";
+
+        for line in buffer.lines().map(|x| x.trim()) {
+            if !line.starts_with("Set-Cookie") {
+                continue
+            }
+            let (_, value) = line.split_once(":").unwrap();
+            let (value, _) = value.split_once(";").unwrap();
+            cookie = value.trim();
+            break
+        }
+
+        let matches = get_arg_matches(
+            Some(
+                vec![
+                    "a",
+                    "authenticate-cookie",
+                    cookie,
+                    "GET",
+                    "",
+                    "https://git.example.com/",
+                    "/",
+                    "git.example.com",
+                    "on",
+                    "",
+                    "",
+                    "/",
+                    "/?p=login",
+        ]));
+        let result = match matches.subcommand() {
+            ("authenticate-cookie", Some(matches)) => {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(cmd_authenticate_cookie(matches, Config::generate_test_config()))
+                    .unwrap()
+            }
+            _ => unreachable!()
+        };
+        assert!(result);
     }
 }
