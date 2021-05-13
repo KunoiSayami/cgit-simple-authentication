@@ -163,17 +163,21 @@ async fn cmd_init(cfg: Config) -> Result<()> {
     println!("Initialize the database successfully");
 
     drop(conn);
+
+    cfg.write_database_commit_timestamp().await?;
     Ok(())
 }
 
 async fn verify_login(cfg: &Config, data: &FormData, redis_conn: redis::Client) -> Result<bool> {
-    // TODO: use timestamp to mark file diff
-    //       or copy in init process
     if !cfg.test {
-        std::fs::copy(
-            cfg.get_database_location(),
-            cfg.get_copied_database_location(),
-        )?;
+        let last_copied = cfg.get_last_copy_timestamp().await.unwrap_or(0);
+        if last_copied == 0 || cfg.get_last_commit_timestamp().await.unwrap_or(0) != last_copied {
+            std::fs::copy(
+                cfg.get_database_location(),
+                cfg.get_copied_database_location(),
+            )?;
+            cfg.write_last_copy_timestamp().await?;
+        }
     }
 
     let mut rd = redis_conn.get_async_connection().await?;
@@ -272,6 +276,8 @@ async fn cmd_add_user(matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
     println!("Insert {} ({}) to database", user, uid);
 
     drop(conn);
+
+    cfg.write_database_commit_timestamp().await?;
     Ok(())
 }
 
@@ -325,6 +331,7 @@ async fn cmd_delete_user(matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
 
     println!("Delete {} from database", user);
 
+    cfg.write_database_commit_timestamp().await?;
     Ok(())
 }
 
@@ -347,6 +354,7 @@ async fn cmd_reset_database(matches: &ArgMatches<'_>, cfg: Config) -> Result<()>
 
     println!("Reset database successfully");
 
+    cfg.write_database_commit_timestamp().await?;
     Ok(())
 }
 
@@ -409,6 +417,7 @@ async fn cmd_upgrade_database(cfg: Config) -> Result<()> {
     drop(origin_conn);
     tmp_dir.close()?;
 
+    cfg.write_database_commit_timestamp().await?;
     Ok(())
 }
 
@@ -588,6 +597,7 @@ mod test {
         Argon2,
     };
     use redis::AsyncCommands;
+    use std::io::Write;
     use std::path::Path;
     use std::path::PathBuf;
     use std::thread::sleep;
@@ -639,8 +649,6 @@ mod test {
             .unwrap();
     }
 
-    fn write_test_result_to_redis() {}
-
     fn test_auth_post() -> String {
         let correct_input = br#"redirect=/&username=hunter2&password=hunter2"#;
         let matches = get_arg_matches(Some(vec![
@@ -682,7 +690,8 @@ mod test {
     #[test]
     fn test_1_auth_failure() {
         let out = test_auth_post();
-        assert!(out.starts_with("Status: 403"))
+        assert!(out.starts_with("Status: 403"));
+        assert!(out.ends_with("\n\n"));
     }
 
     #[test]
@@ -729,8 +738,9 @@ mod test {
                     .unwrap();
                 std::fs::File::create("test/USER_WRITTEN").unwrap();
             }
-            _ => {}
+            _ => unreachable!(),
         }
+        assert!(Path::new("test/COMMIT").exists())
     }
 
     #[test]
@@ -739,7 +749,15 @@ mod test {
 
         let s = test_auth_post();
 
-        println!("{}", s);
-        assert!(s.starts_with("Status: 302"))
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open("test/RESPONSE")
+            .unwrap();
+        file.write_all(s.as_bytes()).unwrap();
+
+        assert!(s.starts_with("Status: 302"));
+        assert!(s.ends_with("\n\n"));
+        assert!(!Path::new("test/COPIED").exists());
     }
 }

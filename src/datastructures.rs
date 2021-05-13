@@ -30,6 +30,7 @@ use std::borrow::Cow;
 use std::fmt::Formatter;
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use url::form_urlencoded;
 
 const DEFAULT_CONFIG_LOCATION: &str = "/etc/cgitrc";
@@ -135,16 +136,6 @@ impl Config {
         self.database.as_str()
     }
 
-    /*    pub fn get_secret_warning(&self) -> &str {
-        if self.secret.is_empty() {
-            r#"<span color="red">Warning: You should specify secret in your cgitrc file.</span>"#
-        } else if self.secret.len() < MINIMUM_SECRET_LENGTH {
-            r#"<span color="yellow">Warning: You should set key length more than MINIMUM_SECRET_LENGTH.</span>"#
-        } else {
-            ""
-        }
-    }*/
-
     pub fn get_copied_database_location(&self) -> PathBuf {
         if self.test {
             return PathBuf::from(self.database.as_str());
@@ -164,6 +155,56 @@ impl Config {
             cookie_ttl: DEFAULT_COOKIE_TTL,
             test: true,
         }
+    }
+
+    async fn read_timestamp_from_file<P: AsRef<Path>>(path: P) -> Result<u64> {
+        let mut file = tokio::fs::File::open(path).await?;
+        let mut buffer = String::new();
+        file.read_to_string(&mut buffer).await?;
+        Ok(buffer.trim().parse()?)
+    }
+
+    pub async fn get_last_commit_timestamp(&self) -> Result<u64> {
+        Self::read_timestamp_from_file(format!(
+            "{}/COMMIT",
+            if self.test { "test" } else { CACHE_DIR }
+        ))
+        .await
+    }
+
+    pub async fn get_last_copy_timestamp(&self) -> Result<u64> {
+        Self::read_timestamp_from_file(format!(
+            "{}/COPIED",
+            if self.test { "test" } else { CACHE_DIR }
+        ))
+        .await
+    }
+
+    async fn write_current_timestamp_to_file<P: AsRef<Path>>(path: P) -> Result<()> {
+        let mut file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(path)
+            .await?;
+        file.write_all(format!("{}", get_current_timestamp()).as_bytes())
+            .await?;
+        Ok(())
+    }
+
+    pub async fn write_database_commit_timestamp(&self) -> Result<()> {
+        Self::write_current_timestamp_to_file(format!(
+            "{}/COMMIT",
+            if self.test { "test" } else { CACHE_DIR }
+        ))
+        .await
+    }
+
+    pub async fn write_last_copy_timestamp(&self) -> Result<()> {
+        Self::write_current_timestamp_to_file(format!(
+            "{}/COPIED",
+            if self.test { "test" } else { CACHE_DIR }
+        ))
+        .await
     }
 }
 

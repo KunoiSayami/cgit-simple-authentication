@@ -7,6 +7,7 @@ target/
 **/*.rs.bk
 
 .idea/
-data/*
-!data/*.default
 .vscode/
+
+# generate by cargo test
+test/
