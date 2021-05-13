@@ -40,7 +40,6 @@ use std::str::FromStr;
 use tempdir::TempDir;
 use tokio_stream::StreamExt as _;
 
-
 struct IOModule<R, W> {
     reader: R,
     writer: W,
@@ -74,7 +73,7 @@ impl<R: BufRead, W: Write> IOModule<R, W> {
                 cookie.get_body(),
                 cfg.cookie_ttl as usize,
             )
-                .await?;
+            .await?;
 
             let cookie_value = cookie.to_string();
 
@@ -87,9 +86,10 @@ impl<R: BufRead, W: Write> IOModule<R, W> {
             writeln!(&mut self.writer, "Status: 302 Found")?;
             writeln!(&mut self.writer, "Cache-Control: no-cache, no-store")?;
             writeln!(&mut self.writer, "Location: {}", location)?;
-            writeln!(&mut self.writer,
-                     "Set-Cookie: cgit_auth={}; Domain={}; Max-Age={}; HttpOnly{}",
-                     cookie_value, domain, cfg.cookie_ttl, cookie_suffix
+            writeln!(
+                &mut self.writer,
+                "Set-Cookie: cgit_auth={}; Domain={}; Max-Age={}; HttpOnly{}",
+                cookie_value, domain, cfg.cookie_ttl, cookie_suffix
             )?;
         } else {
             writeln!(&mut self.writer, "Status: 403 Forbidden")?;
@@ -99,7 +99,6 @@ impl<R: BufRead, W: Write> IOModule<R, W> {
         writeln!(&mut self.writer)?;
         Ok(())
     }
-
 }
 
 // Processing the `authenticate-cookie` called by cgit.
@@ -154,7 +153,7 @@ async fn cmd_init(cfg: Config) -> Result<()> {
             .await?;
 
         if !rows.is_empty() {
-            return Ok(())
+            return Ok(());
         }
     }
 
@@ -182,25 +181,25 @@ async fn verify_login(cfg: &Config, data: &FormData, redis_conn: redis::Client) 
     let mut conn = sqlx::sqlite::SqliteConnectOptions::from_str(
         cfg.get_copied_database_location().to_str().unwrap(),
     )?
-        .journal_mode(sqlx::sqlite::SqliteJournalMode::Off)
-        .log_statements(log::LevelFilter::Trace)
-        .connect()
-        .await?;
+    .journal_mode(sqlx::sqlite::SqliteJournalMode::Off)
+    .log_statements(log::LevelFilter::Trace)
+    .connect()
+    .await?;
 
     let (passwd_hash, uid) = sqlx::query_as::<_, (String, String)>(
         r#"SELECT "password", "uid" FROM "accounts" WHERE "user" = ?"#,
     )
-        .bind(data.get_user())
-        .fetch_one(&mut conn)
-        .await?;
+    .bind(data.get_user())
+    .fetch_one(&mut conn)
+    .await?;
 
     let key = format!("cgit_repo_{}", data.get_user());
     if !rd.exists(&key).await? {
         if let Some((repos,)) =
-        sqlx::query_as::<_, (String,)>(r#"SELECT "repos" FROM "repo" WHERE "uid" = ? "#)
-            .bind(uid)
-            .fetch_optional(&mut conn)
-            .await?
+            sqlx::query_as::<_, (String,)>(r#"SELECT "repos" FROM "repo" WHERE "uid" = ? "#)
+                .bind(uid)
+                .fetch_optional(&mut conn)
+                .await?
         {
             let iter = repos.split_whitespace().collect::<Vec<&str>>();
             rd.sadd(&key, iter).await?;
@@ -370,9 +369,9 @@ async fn cmd_upgrade_database(cfg: Config) -> Result<()> {
     let (v,) = sqlx::query_as::<_, (String,)>(
         r#"SELECT "value" FROM "auth_meta" WHERE "key" = 'version' "#,
     )
-        .fetch_optional(&mut origin_conn)
-        .await?
-        .unwrap();
+    .fetch_optional(&mut origin_conn)
+    .await?
+    .unwrap();
 
     #[allow(deprecated)]
     if v.eq(database::previous::VERSION) {
@@ -434,7 +433,7 @@ async fn async_main(arg_matches: ArgMatches<'_>) -> Result<i32> {
             let output = std::io::stdout();
             let mut module = IOModule {
                 reader: input,
-                writer: output
+                writer: output,
             };
             module.cmd_authenticate_post(matches, cfg).await?;
         }
@@ -465,7 +464,6 @@ async fn async_main(arg_matches: ArgMatches<'_>) -> Result<i32> {
 }
 
 fn get_arg_matches(arguments: Option<Vec<&str>>) -> ArgMatches {
-
     // Sub-arguments for each command, see cgi defines.
     let sub_args = &[
         Arg::with_name("http-cookie").required(true), // 2
@@ -531,7 +529,6 @@ fn get_arg_matches(arguments: Option<Vec<&str>>) -> ArgMatches {
 }
 
 fn process_arguments() -> Result<()> {
-
     let ret = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -583,18 +580,18 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod test {
-    use crate::{cmd_init, cmd_add_user};
-    use std::path::PathBuf;
+    use crate::datastructures::{rand_str, Config};
+    use crate::{cmd_add_user, cmd_init};
+    use crate::{get_arg_matches, IOModule};
     use argon2::{
-        password_hash::{PasswordHash, PasswordVerifier, PasswordHasher, SaltString},
+        password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
         Argon2,
     };
-    use crate::{IOModule, get_arg_matches};
-    use crate::datastructures::{Config, rand_str};
     use redis::AsyncCommands;
-    use std::time::Duration;
-    use std::thread::sleep;
     use std::path::Path;
+    use std::path::PathBuf;
+    use std::thread::sleep;
+    use std::time::Duration;
 
     #[test]
     fn test_argon2() {
@@ -642,12 +639,9 @@ mod test {
             .unwrap();
     }
 
-    fn write_test_result_to_redis() {
-
-    }
+    fn write_test_result_to_redis() {}
 
     fn test_auth_post() -> String {
-
         let correct_input = br#"redirect=/&username=hunter2&password=hunter2"#;
         let matches = get_arg_matches(Some(vec![
             "a",
@@ -673,21 +667,17 @@ mod test {
         let cfg = Config::generate_test_config();
 
         match matches.subcommand() {
-            ("authenticate-post", Some(matches)) => {
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .unwrap()
-                    .block_on(module.cmd_authenticate_post(matches, cfg))
-                    .unwrap()
-            }
+            ("authenticate-post", Some(matches)) => tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(module.cmd_authenticate_post(matches, cfg))
+                .unwrap(),
             _ => {}
         }
 
         String::from_utf8(output).unwrap()
-
     }
-
 
     #[test]
     fn test_1_auth_failure() {
@@ -712,12 +702,11 @@ mod test {
         std::fs::File::create("test/DATABASE_INITED").unwrap();
     }
 
-
     fn lock(path: &std::path::PathBuf, sleep_length: usize) {
         for _ in 0..(sleep_length * 100) {
             sleep(Duration::from_millis(10));
             if path.exists() {
-                break
+                break;
             }
         }
 
@@ -746,14 +735,11 @@ mod test {
 
     #[test]
     fn test_3_auth_pass() {
-
         lock(&PathBuf::from("test/USER_WRITTEN"), 15);
 
         let s = test_auth_post();
 
         println!("{}", s);
         assert!(s.starts_with("Status: 302"))
-
     }
-
 }

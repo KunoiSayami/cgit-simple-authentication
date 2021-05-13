@@ -147,7 +147,7 @@ impl Config {
 
     pub fn get_copied_database_location(&self) -> PathBuf {
         if self.test {
-            return PathBuf::from(self.database.as_str())
+            return PathBuf::from(self.database.as_str());
         }
 
         std::path::Path::new(CACHE_DIR).join(
