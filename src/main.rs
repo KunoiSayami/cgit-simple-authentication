@@ -55,7 +55,6 @@ impl<R: BufRead, W: Write> IOModule<R, W> {
         //log::debug!("{}", buffer);
         let data = datastructures::FormData::from(buffer);
 
-
         let ret = verify_login(&cfg, &data).await;
 
         if let Err(ref e) = ret {
@@ -112,7 +111,7 @@ async fn cmd_authenticate_cookie(matches: &ArgMatches<'_>, cfg: Config) -> Resul
         bypass = true;
     }
 
-    if bypass || !cfg.check_repo_protect(repo){
+    if bypass || (!repo.is_empty() && !cfg.check_repo_protect(repo)) {
         return Ok(true);
     }
 
@@ -123,24 +122,23 @@ async fn cmd_authenticate_cookie(matches: &ArgMatches<'_>, cfg: Config) -> Resul
     let redis_conn = redis::Client::open("redis://127.0.0.1/")?;
     let mut conn = redis_conn.get_async_connection().await?;
 
+    let redis_key = format!("cgit_repo_{}", repo);
     if !repo.is_empty() {
-        let key = format!("cgit_repo_{}", repo);
-        if !conn.exists(&key).await? {
+        if !conn.exists(&redis_key).await? {
             let mut sql_conn = SqliteConnectOptions::from_str(cfg.get_database_location())?
                 .read_only(true)
                 .connect()
                 .await?;
-            if let Some((users, )) =
-            sqlx::query_as::<_, (String, )>(r#"SELECT "users" FROM "repos" WHERE "repo" = ? "#)
-                .bind(repo)
-                .fetch_optional(&mut sql_conn)
-                .await?
+            if let Some((users,)) =
+                sqlx::query_as::<_, (String,)>(r#"SELECT "users" FROM "repos" WHERE "repo" = ? "#)
+                    .bind(repo)
+                    .fetch_optional(&mut sql_conn)
+                    .await?
             {
-                let iter = users.split_whitespace().collect::<Vec<&str>>();
-                conn.sadd(&key, iter).await?;
+                let users = users.split_whitespace().collect::<Vec<&str>>();
+                conn.sadd(&redis_key, users).await?;
             }
         }
-        // TODO: redis repository ACL check should goes here
     }
 
     if let Ok(Some(cookie)) = Cookie::load_from_request(cookies) {
@@ -149,7 +147,16 @@ async fn cmd_authenticate_cookie(matches: &ArgMatches<'_>, cfg: Config) -> Resul
             .await
         {
             if cookie.eq_body(r.as_str()) {
-                return Ok(true);
+                if repo.is_empty() {
+                    return Ok(true);
+                }
+                if conn
+                    .sismember::<_, _, i32>(&redis_key, cookie.get_user())
+                    .await?
+                    == 1
+                {
+                    return Ok(true);
+                }
             }
         }
         log::debug!("{:?}", cookie);
@@ -209,12 +216,11 @@ async fn verify_login(cfg: &Config, data: &FormData) -> Result<bool> {
     .connect()
     .await?;
 
-    let (passwd_hash,) = sqlx::query_as::<_, (String,)>(
-        r#"SELECT "password" FROM "accounts" WHERE "user" = ?"#,
-    )
-    .bind(data.get_user())
-    .fetch_one(&mut conn)
-    .await?;
+    let (passwd_hash,) =
+        sqlx::query_as::<_, (String,)>(r#"SELECT "password" FROM "accounts" WHERE "user" = ?"#)
+            .bind(data.get_user())
+            .fetch_one(&mut conn)
+            .await?;
 
     let parsed_hash = PasswordHash::new(passwd_hash.as_str()).unwrap();
     Ok(data.verify_password(&parsed_hash))
@@ -426,13 +432,20 @@ async fn cmd_upgrade_database(cfg: Config) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_repo_user_control(matches: &ArgMatches<'_>, cfg: Config, is_delete: bool) -> Result<()> {
+async fn cmd_repo_user_control(
+    matches: &ArgMatches<'_>,
+    cfg: Config,
+    is_delete: bool,
+) -> Result<()> {
     let repo = matches.value_of("repo").unwrap_or("");
     let user = matches.value_of("user").unwrap_or("");
 
     let clear_all = matches.is_present("clear-all");
 
-    if repo.is_empty() || (is_delete && !clear_all && user.is_empty()) || (!is_delete && user.is_empty()) {
+    if repo.is_empty()
+        || (is_delete && !clear_all && user.is_empty())
+        || (!is_delete && user.is_empty())
+    {
         return Err(anyhow::Error::msg("Invalid repository or username"));
     }
 
@@ -445,10 +458,11 @@ async fn cmd_repo_user_control(matches: &ArgMatches<'_>, cfg: Config, is_delete:
         .bind(repo)
         .fetch_optional(&mut conn)
         .await?
-        .is_none() {
+        .is_none()
+    {
         if is_delete {
             println!("Row is empty.");
-            return Ok(())
+            return Ok(());
         }
         sqlx::query(r#"INSERT INTO "repos" VALUES (?, ?)"#)
             .bind(repo)
@@ -488,7 +502,7 @@ async fn cmd_repo_user_control(matches: &ArgMatches<'_>, cfg: Config, is_delete:
         .await?;
 
     let redis_key = format!("cgit_repo_{}", repo);
-    if redis_conn.exists::<_, i32>(&redis_key).await? == 0{
+    if redis_conn.exists::<_, i32>(&redis_key).await? == 0 {
         redis_conn.sadd::<_, _, i32>(&redis_key, users).await?;
     } else {
         if is_delete {
@@ -503,11 +517,12 @@ async fn cmd_repo_user_control(matches: &ArgMatches<'_>, cfg: Config, is_delete:
     }
 
     if !clear_all {
-        println!("{} user {} {} repository {} ACL successful",
-                 if is_delete { "Delete" } else { "Add" },
-                 user,
-                 if is_delete { "from" } else { "to" },
-                 repo,
+        println!(
+            "{} user {} {} repository {} ACL successful",
+            if is_delete { "Delete" } else { "Add" },
+            user,
+            if is_delete { "from" } else { "to" },
+            repo,
         );
     } else {
         println!("Clear all users from repository {} ACL", repo);
@@ -562,9 +577,7 @@ async fn async_main(arg_matches: ArgMatches<'_>) -> Result<i32> {
         ("upgrade", Some(_matches)) => {
             cmd_upgrade_database(cfg).await?;
         }
-        ("repoadd", Some(matches)) => {
-            cmd_repo_user_control(matches, cfg, false).await?
-        }
+        ("repoadd", Some(matches)) => cmd_repo_user_control(matches, cfg, false).await?,
         ("repodel", Some(matches)) => {
             cmd_repo_user_control(matches, cfg, true).await?;
         }
@@ -713,8 +726,8 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod test {
-    use crate::datastructures::{rand_str, Config, TestSuite, ProtectedRepo};
-    use crate::{cmd_add_user, cmd_authenticate_cookie, cmd_init};
+    use crate::datastructures::{rand_str, Config, TestSuite};
+    use crate::{cmd_add_user, cmd_authenticate_cookie, cmd_init, cmd_repo_user_control};
     use crate::{get_arg_matches, IOModule};
     use argon2::{
         password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
@@ -870,12 +883,24 @@ mod test {
     #[test]
     fn test_03_insert_repo() {
         lock(&PathBuf::from("test/USER_WRITTEN"), 5);
-        let matches = crate::get_arg_matches(Some(vec!["a", "repoadd", "hunter2", "hunter2"]));
+        let matches = crate::get_arg_matches(Some(vec!["a", "repoadd", "test", "hunter2"]));
+        match matches.subcommand() {
+            ("repoadd", Some(matches)) => {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(cmd_repo_user_control(matches, Config::generate_test_config(), false))
+                    .unwrap();
+                std::fs::File::create("test/REPO_USER_ADDED").unwrap();
+            }
+            _ => unreachable!()
+        }
     }
 
     #[test]
     fn test_91_auth_pass() {
-        lock(&PathBuf::from("test/USER_WRITTEN"), 7);
+        lock(&PathBuf::from("test/REPO_USER_ADDED"), 7);
 
         let s = test_auth_post();
 
@@ -893,6 +918,16 @@ mod test {
 
     #[test]
     fn test_92_authenticate_cookie() {
+        test_authenticate_cookie("test");
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_93_authenticate_cookie() {
+        test_authenticate_cookie("repo");
+    }
+
+    fn test_authenticate_cookie(repo: &str) {
         lock(&PathBuf::from("test/RESPONSE"), 15);
         let mut buffer = String::new();
 
@@ -923,7 +958,7 @@ mod test {
             "/",
             "git.example.com",
             "on",
-            "",
+            repo,
             "",
             "/",
             "/?p=login",
@@ -958,31 +993,32 @@ mod test {
     fn test_02_protected_repo_parser() {
         let tmpdir = tempdir::TempDir::new("test").unwrap();
 
-        let another_file_path = format!("include={}/REPO_SETTING # TEST", tmpdir.path().to_str().unwrap());
+        let another_file_path = format!(
+            "include={}/REPO_SETTING # TEST\ncgit-simple-auth-protect=none",
+            tmpdir.path().to_str().unwrap()
+        );
         write_to_specify_file(&tmpdir.path().join("CFG"), another_file_path.as_bytes()).unwrap();
+        write_to_specify_file(
+            &tmpdir.path().join("REPO_SETTING"),
+            b"repo.url=test\nrepo.protect=true",
+        )
+        .unwrap();
 
+        let cfg = Config::load_from_path(tmpdir.path().join("CFG"));
 
-        write_to_specify_file(&tmpdir.path().join("REPO_SETTING"), b"repo.url=test\nrepo.protect=true").unwrap();
+        assert!(cfg.check_repo_protect("test"));
+        assert!(!cfg.query_is_all_protected());
 
+        write_to_specify_file(
+            &tmpdir.path().join("REPO_SETTING"),
+            b"repo.protect=true\nrepo.url=test",
+        )
+        .unwrap();
 
-        let result = ProtectedRepo::load_from_file(tmpdir.path().join("CFG"));
+        let cfg = Config::load_from_path(tmpdir.path().join("CFG"));
 
-        assert!(result.query_is_protected("test"));
-        assert!(!result.query_is_all_protected());
-
-        write_to_specify_file(&tmpdir.path().join("REPO_SETTING"), b"repo.protect=true\nrepo.url=test").unwrap();
-
-        let result = ProtectedRepo::load_from_file(tmpdir.path().join("CFG"));
-
-        assert!(!result.query_is_protected("test"));
-        assert!(!result.query_is_all_protected());
-
-        write_to_specify_file(&tmpdir.path().join("REPO_SETTING"), b"repo.protect=true\nrepo.url=test\n\ncgit-simple-auth-protect=full").unwrap();
-
-        let result = ProtectedRepo::load_from_file(tmpdir.path().join("CFG"));
-
-        assert!(result.query_is_all_protected());
-        assert!(result.query_is_protected("test"));
+        assert!(!cfg.check_repo_protect("test"));
+        assert!(!cfg.query_is_all_protected());
 
         tmpdir.close().unwrap();
     }

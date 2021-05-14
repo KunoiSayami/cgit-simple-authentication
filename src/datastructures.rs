@@ -78,11 +78,28 @@ pub(crate) trait TestSuite {
 pub struct Config {
     pub cookie_ttl: u64,
     database: String,
-    //access_node: hashmap,
     pub bypass_root: bool,
-    //secret: String,
     pub(crate) test: bool,
-    protected_repos: ProtectedRepo,
+
+    /// To set specify repository protect, You should setup repo's protect attribute
+    /// First, set cgit-simple-auth-protect to none in /etc/cgitrc file
+    ///
+    /// # Examples
+    ///
+    /// In /etc/cgitrc:
+    /// ```conf
+    /// cgit-simple-auth-protect=none
+    /// ```
+    ///
+    /// In repo.conf
+    /// ```conf
+    /// repo.url=test
+    /// repo.protected=true
+    /// ```
+    ///
+    /// Default behavior is protect all repository
+    protect_all: bool,
+    protected_repos: Vec<String>,
 }
 
 impl Default for Config {
@@ -91,8 +108,8 @@ impl Default for Config {
             cookie_ttl: DEFAULT_COOKIE_TTL,
             database: DEFAULT_DATABASE_LOCATION.to_string(),
             bypass_root: false,
-            //secret: Default::default(),
             test: false,
+            protect_all: true,
             protected_repos: Default::default(),
         }
     }
@@ -105,10 +122,12 @@ impl Config {
 
     pub fn load_from_path<P: AsRef<Path>>(path: P) -> Self {
         let file = read_to_string(&path).unwrap_or_default();
+
         let mut cookie_ttl: u64 = DEFAULT_COOKIE_TTL;
         let mut database: &str = "/etc/cgit/auth.db";
         let mut bypass_root: bool = false;
-        //let mut secret: &str = "";
+        let mut protect_all: bool = true;
+
         for line in file.lines() {
             let line = line.trim();
             if !line.contains('=') || !line.starts_with("cgit-simple-auth-") {
@@ -120,23 +139,74 @@ impl Config {
             } else {
                 line.split_once('=').unwrap()
             };
+            let value = value.trim();
             let key_name = key.split_once("auth-").unwrap().1.trim();
             match key_name {
                 "cookie-ttl" => cookie_ttl = value.parse().unwrap_or(DEFAULT_COOKIE_TTL),
                 "database" => database = value,
                 "bypass-root" => bypass_root = value.to_lowercase().eq("true"),
-                //"secret" => secret = value,
+                "protect" => protect_all = !value.to_lowercase().eq("none"),
                 _ => {}
             }
         }
+
+        let protected_repos = if !protect_all {
+            Self::load_protect_repos_from_file(path)
+        } else {
+            Default::default()
+        };
+
         Self {
             cookie_ttl,
             database: database.to_string(),
             bypass_root,
             test: false,
-            //secret: secret.to_string(),
-            protected_repos: ProtectedRepo::load_from_file(path),
+            protect_all,
+            protected_repos,
         }
+    }
+
+    pub fn load_protect_repos_from_file<P: AsRef<Path>>(path: P) -> Vec<String> {
+        let context = read_to_string(path).unwrap();
+
+        let mut protect_repos = Vec::new();
+
+        let mut current_repo: &str = "";
+
+        for line in context.lines() {
+            let line = line.trim();
+            if line.starts_with('#') || !line.contains('=') {
+                continue;
+            }
+
+            let (key, value) = if line.contains('#') {
+                line.split_once('#')
+                    .unwrap()
+                    .0
+                    .trim()
+                    .split_once('=')
+                    .unwrap()
+            } else {
+                line.split_once('=').unwrap()
+            };
+
+            if key.eq("repo.url") {
+                current_repo = value.trim();
+                continue;
+            }
+
+            if key.eq("repo.protect") {
+                if value.trim().to_lowercase().eq("true") && !current_repo.is_empty() {
+                    protect_repos.push(current_repo.to_string());
+                }
+            }
+
+            if key.eq("include") {
+                let r = Self::load_protect_repos_from_file(value);
+                protect_repos.extend(r)
+            }
+        }
+        protect_repos
     }
 
     pub fn get_database_location(&self) -> &str {
@@ -206,7 +276,15 @@ impl Config {
     }
 
     pub fn check_repo_protect(&self, repo: &str) -> bool {
-        self.protected_repos.query_is_protected(repo)
+        if self.protect_all {
+            return true;
+        }
+        self.protected_repos.iter().any(|x| x.eq(repo))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn query_is_all_protected(&self) -> bool {
+        self.protect_all
     }
 }
 
@@ -217,7 +295,8 @@ impl TestSuite for Config {
             bypass_root: false,
             cookie_ttl: DEFAULT_COOKIE_TTL,
             test: true,
-            protected_repos: Default::default(),
+            protect_all: false,
+            protected_repos: vec!["test".to_string()],
         }
     }
 }
@@ -400,102 +479,5 @@ impl std::fmt::Display for Cookie {
             self.timestamp, self.randint, self.user, self.reversed
         );
         write!(f, "{}", base64::encode(s))
-    }
-}
-
-
-/// To set specify repository protect, You should setup repo's protect attribute
-///
-/// # Examples
-///
-/// ```conf
-///   repo.url=test
-///   repo.protected=true
-/// ```
-///
-/// OR:
-///
-/// Set all repository under protected, by set cgit-simple-auth-protect=full
-
-#[derive(Debug, Clone)]
-pub struct ProtectedRepo {
-    protect_all: bool,
-    protect_repos: Vec<String>,
-}
-
-impl ProtectedRepo {
-
-    pub fn load_from_file<P: AsRef<Path>>(path: P) -> Self {
-        let context = read_to_string(path).unwrap();
-
-        let mut protect_repos = Vec::new();
-
-        let mut protect_all = false;
-        let mut current_repo: &str = "";
-
-        for line in context.lines() {
-            let line = line.trim();
-            if line.starts_with('#') || !line.contains('=') {
-                continue
-            }
-
-            let (key, value) = if line.contains('#') {
-                line.split_once('#').unwrap().0.trim().split_once('=').unwrap()
-            } else {
-                line.split_once('=').unwrap()
-            };
-
-            if key.eq("repo.url") {
-                current_repo = value.trim();
-                continue
-            }
-
-            if key.eq("repo.protect") {
-                if value.trim().to_lowercase().eq("true") && !current_repo.is_empty() {
-                    protect_repos.push(current_repo.to_string());
-                }
-            }
-
-            if key.eq("include") {
-                let r = Self::load_from_file(value);
-                if r.protect_all {
-                    protect_all = true;
-                    break
-                }
-                protect_repos.extend(r.protect_repos)
-            }
-
-            if key.eq("cgit-simple-auth-protect") && value.trim().to_lowercase().eq("full") {
-                protect_all = true;
-                break
-            }
-        }
-        if protect_all {
-            protect_repos.clear();
-        }
-        Self {
-            protect_all,
-            protect_repos,
-        }
-    }
-
-    pub fn query_is_protected(&self, repo: &str) -> bool {
-        if self.protect_all {
-            return true
-        }
-        self.protect_repos.iter().any(|x| x.eq(repo))
-    }
-
-    pub fn query_is_all_protected(&self) -> bool {
-        self.protect_all
-    }
-}
-
-impl Default for ProtectedRepo {
-    fn default() -> Self {
-        Self {
-            protect_all: true,
-            protect_repos: Default::default()
-        }
     }
 }
