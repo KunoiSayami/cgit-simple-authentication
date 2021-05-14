@@ -10,4 +10,4 @@ target/
 .vscode/
 
 # generate by cargo test
-test/
+test*/

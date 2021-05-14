@@ -70,6 +70,10 @@ pub fn rand_str(len: usize) -> String {
     password
 }
 
+pub(crate) trait TestSuite {
+    fn generate_test_config() -> Self;
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub cookie_ttl: u64,
@@ -78,6 +82,7 @@ pub struct Config {
     pub bypass_root: bool,
     //secret: String,
     pub(crate) test: bool,
+    protected_repos: ProtectedRepo,
 }
 
 impl Default for Config {
@@ -88,6 +93,7 @@ impl Default for Config {
             bypass_root: false,
             //secret: Default::default(),
             test: false,
+            protected_repos: Default::default(),
         }
     }
 }
@@ -98,7 +104,7 @@ impl Config {
     }
 
     pub fn load_from_path<P: AsRef<Path>>(path: P) -> Self {
-        let file = read_to_string(path).unwrap_or_default();
+        let file = read_to_string(&path).unwrap_or_default();
         let mut cookie_ttl: u64 = DEFAULT_COOKIE_TTL;
         let mut database: &str = "/etc/cgit/auth.db";
         let mut bypass_root: bool = false;
@@ -129,6 +135,7 @@ impl Config {
             bypass_root,
             test: false,
             //secret: secret.to_string(),
+            protected_repos: ProtectedRepo::load_from_file(path),
         }
     }
 
@@ -146,15 +153,6 @@ impl Config {
                 .file_name()
                 .unwrap(),
         )
-    }
-
-    pub(crate) fn generate_test_config() -> Self {
-        Self {
-            database: "test/tmp.db".to_string(),
-            bypass_root: false,
-            cookie_ttl: DEFAULT_COOKIE_TTL,
-            test: true,
-        }
     }
 
     async fn read_timestamp_from_file<P: AsRef<Path>>(path: P) -> Result<u64> {
@@ -205,6 +203,22 @@ impl Config {
             if self.test { "test" } else { CACHE_DIR }
         ))
         .await
+    }
+
+    pub fn check_repo_protect(&self, repo: &str) -> bool {
+        self.protected_repos.query_is_protected(repo)
+    }
+}
+
+impl TestSuite for Config {
+    fn generate_test_config() -> Self {
+        Self {
+            database: "test/tmp.db".to_string(),
+            bypass_root: false,
+            cookie_ttl: DEFAULT_COOKIE_TTL,
+            test: true,
+            protected_repos: Default::default(),
+        }
     }
 }
 
@@ -365,6 +379,7 @@ impl Cookie {
         format!("{}_{}", self.timestamp, self.randint)
     }
 
+    #[allow(dead_code)]
     pub fn get_user(&self) -> &str {
         self.user.as_str()
     }
@@ -388,48 +403,99 @@ impl std::fmt::Display for Cookie {
     }
 }
 
-/*
-pub struct CookieOrigin {
-    timestamp: u64,
-    randint: RandIntType,
-    user: String,
-    rand_str: String,
+
+/// To set specify repository protect, You should setup repo's protect attribute
+///
+/// # Examples
+///
+/// ```conf
+///   repo.url=test
+///   repo.protected=true
+/// ```
+///
+/// OR:
+///
+/// Set all repository under protected, by set cgit-simple-auth-protect=full
+
+#[derive(Debug, Clone)]
+pub struct ProtectedRepo {
+    protect_all: bool,
+    protect_repos: Vec<String>,
 }
 
-impl CookieOrigin {
-    pub fn new(randint: RandIntType, user: &String, rand_str: &String) -> Self {
+impl ProtectedRepo {
+
+    pub fn load_from_file<P: AsRef<Path>>(path: P) -> Self {
+        let context = read_to_string(path).unwrap();
+
+        let mut protect_repos = Vec::new();
+
+        let mut protect_all = false;
+        let mut current_repo: &str = "";
+
+        for line in context.lines() {
+            let line = line.trim();
+            if line.starts_with('#') || !line.contains('=') {
+                continue
+            }
+
+            let (key, value) = if line.contains('#') {
+                line.split_once('#').unwrap().0.trim().split_once('=').unwrap()
+            } else {
+                line.split_once('=').unwrap()
+            };
+
+            if key.eq("repo.url") {
+                current_repo = value.trim();
+                continue
+            }
+
+            if key.eq("repo.protect") {
+                if value.trim().to_lowercase().eq("true") && !current_repo.is_empty() {
+                    protect_repos.push(current_repo.to_string());
+                }
+            }
+
+            if key.eq("include") {
+                let r = Self::load_from_file(value);
+                if r.protect_all {
+                    protect_all = true;
+                    break
+                }
+                protect_repos.extend(r.protect_repos)
+            }
+
+            if key.eq("cgit-simple-auth-protect") && value.trim().to_lowercase().eq("full") {
+                protect_all = true;
+                break
+            }
+        }
+        if protect_all {
+            protect_repos.clear();
+        }
         Self {
-            timestamp: get_current_timestamp(),
-            randint,
-            user: user.clone(),
-            rand_str: rand_str.clone(),
+            protect_all,
+            protect_repos,
         }
     }
 
-    pub async fn to_cookie(&self, cfg: &Config) -> Result<Cookie> {
-        let mut file = File::open(Path::new(CACHE_DIR).join(DEFAULT_IV_FILE_NAME)).await?;
-        let mut context = String::new();
-        file.read_to_string(&mut context).await?;
-        let iv_file: IvFile = serde_json::from_str(&context)?;
-        let key = cfg.secret.to_hex();
-        let iv = iv_file.iv.to_hex();
+    pub fn query_is_protected(&self, repo: &str) -> bool {
+        if self.protect_all {
+            return true
+        }
+        self.protect_repos.iter().any(|x| x.eq(repo))
+    }
 
-        let mut cipher = Blowfish::new(key);
-
-        cipher.write_all().awa
-
-        let mut buffer = [0u8, 128];
-
-        let plain_text = format!("{}, {}", self.user, self.rand_str);
-
-        let pos = plain_text.len();
-
-        buffer[..pos].copy_from_slice(plain_text.as_bytes());
-
-        let b = Block::from_mut_slice(&mut buffer);
-
-
-        Ok(())
+    pub fn query_is_all_protected(&self) -> bool {
+        self.protect_all
     }
 }
-*/
+
+impl Default for ProtectedRepo {
+    fn default() -> Self {
+        Self {
+            protect_all: true,
+            protect_repos: Default::default()
+        }
+    }
+}
