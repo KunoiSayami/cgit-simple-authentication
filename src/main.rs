@@ -230,7 +230,6 @@ async fn verify_login(cfg: &Config, data: &FormData) -> Result<bool> {
 pub struct Meta<'a> {
     action: &'a str,
     redirect: &'a str,
-    //custom_warning: &'a str,
 }
 
 // Processing the `body` called by cgit.
@@ -240,7 +239,6 @@ async fn cmd_body(matches: &ArgMatches<'_>, _cfg: Config) {
     let meta = Meta {
         action: matches.value_of("login-url").unwrap_or(""),
         redirect: matches.value_of("current-url").unwrap_or(""),
-        //custom_warning: cfg.get_secret_warning()
     };
     handlebars
         .render_template_to_write(source, &meta, std::io::stdout())

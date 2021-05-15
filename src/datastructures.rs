@@ -38,7 +38,6 @@ const DEFAULT_COOKIE_TTL: u64 = 1200;
 const DEFAULT_DATABASE_LOCATION: &str = "/etc/cgit/auth.db";
 pub const CACHE_DIR: &str = "/var/cache/cgit";
 pub type RandIntType = u32;
-//pub const MINIMUM_SECRET_LENGTH: usize = 8;
 pub const COOKIE_LENGTH: usize = 32;
 
 pub fn get_current_timestamp() -> u64 {
@@ -347,23 +346,6 @@ impl FormData {
     pub fn get_user(&self) -> &String {
         &self.user
     }
-
-    pub fn get_password_argon2(&self) -> Result<String> {
-        Self::get_string_argon2_hash(&self.password)
-    }
-
-    #[allow(dead_code)]
-    pub fn get_password_argon2_cache(&mut self) -> Result<String> {
-        if self.hash.is_empty() {
-            self.hash = self.get_password_argon2()?;
-        }
-        Ok(self.hash.clone())
-    }
-
-    #[allow(dead_code)]
-    pub fn get_argon2_without_calc(&self) -> &String {
-        &self.hash
-    }
 }
 
 impl From<&[u8]> for FormData {
@@ -459,7 +441,6 @@ impl Cookie {
         format!("{}_{}", self.timestamp, self.randint)
     }
 
-    #[allow(dead_code)]
     pub fn get_user(&self) -> &str {
         self.user.as_str()
     }

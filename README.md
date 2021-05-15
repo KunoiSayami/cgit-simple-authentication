@@ -1,14 +1,41 @@
 # Cgit simple authentication
 
-This project is currently developing, minor version may incompatible with previous minor version.
+Simple authentication for [cgit](https://wiki.archlinux.org/title/Cgit) powered by [sqlite](https://wiki.archlinux.org/title/SQLite) and [redis](https://wiki.archlinux.org/title/Redis)
 
-## Notice
+## Configure
 
-Upgrade from v0.1.x to v0.2.x should reset database due to password storage method changed.
+Add this project as cgit [`auth-filter`](https://man.archlinux.org/man/cgitrc.5#FILTER_API)
+
+```conf
+auth-filter=/opt/cgit-simple-authentication/target/release/cgit-simple-authentication
+```
+
+Available options for this filter:
+
+```conf
+# Set cookie time to live
+cgit-simple-auth-cookie-ttl=600
+# Specify database location (Default is /etc/cgit/auth.db) 
+cgit-simple-auth-database=/etc/cgit/auth.db
+# Should authenticate in repositories root view
+cgit-simple-auth-bypass-root=false
+# Should enable authenticate in all repository
+cgit-simple-auth-full-protect=true
+```
+
+Available options for repositories:
+
+_Should set `cgit-simple-auth-full-protect=false`_ 
+
+```conf
+repo.url=test
+# Enable protect for this repository
+repo.protect=true
+```
 
 ## Source
 
-Most idea from: https://github.com/varphone/cgit-gogs-auth-filter
+Most of the ideas come from: https://github.com/varphone/cgit-gogs-auth-filter
 
 ## License
 
