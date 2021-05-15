@@ -88,13 +88,13 @@ pub struct Config {
     ///
     /// In /etc/cgitrc:
     /// ```conf
-    /// cgit-simple-auth-protect=none
+    /// cgit-simple-auth-full-protect=false
     /// ```
     ///
     /// In repo.conf
     /// ```conf
     /// repo.url=test
-    /// repo.protected=true
+    /// repo.protect=true
     /// ```
     ///
     /// Default behavior is protect all repository
@@ -145,7 +145,7 @@ impl Config {
                 "cookie-ttl" => cookie_ttl = value.parse().unwrap_or(DEFAULT_COOKIE_TTL),
                 "database" => database = value,
                 "bypass-root" => bypass_root = value.to_lowercase().eq("true"),
-                "protect" => protect_all = !value.to_lowercase().eq("none"),
+                "full-protect" => protect_all = !value.to_lowercase().eq("false"),
                 _ => {}
             }
         }
@@ -195,10 +195,11 @@ impl Config {
                 continue;
             }
 
-            if key.eq("repo.protect") {
-                if value.trim().to_lowercase().eq("true") && !current_repo.is_empty() {
-                    protect_repos.push(current_repo.to_string());
-                }
+            if key.eq("repo.protect")
+                && value.trim().to_lowercase().eq("true")
+                && !current_repo.is_empty()
+            {
+                protect_repos.push(current_repo.to_string());
             }
 
             if key.eq("include") {
@@ -296,7 +297,7 @@ impl TestSuite for Config {
             cookie_ttl: DEFAULT_COOKIE_TTL,
             test: true,
             protect_all: false,
-            protected_repos: vec!["test".to_string()],
+            protected_repos: vec!["test".to_string(), "repo".to_string()],
         }
     }
 }

@@ -20,6 +20,7 @@
 
 mod database;
 mod datastructures;
+mod test;
 
 use crate::datastructures::{Config, Cookie, FormData, TestSuite};
 use anyhow::Result;
@@ -104,10 +105,11 @@ impl<R: BufRead, W: Write> IOModule<R, W> {
 async fn cmd_authenticate_cookie(matches: &ArgMatches<'_>, cfg: Config) -> Result<bool> {
     let cookies = matches.value_of("http-cookie").unwrap_or("");
     let repo = matches.value_of("repo").unwrap_or("");
+    let current_url = matches.value_of("current-url").unwrap_or("");
 
     let mut bypass = false;
 
-    if cfg.bypass_root && matches.value_of("current-url").unwrap_or("").eq("/") {
+    if cfg.bypass_root && current_url.eq("/") && repo.is_empty() {
         bypass = true;
     }
 
@@ -123,21 +125,19 @@ async fn cmd_authenticate_cookie(matches: &ArgMatches<'_>, cfg: Config) -> Resul
     let mut conn = redis_conn.get_async_connection().await?;
 
     let redis_key = format!("cgit_repo_{}", repo);
-    if !repo.is_empty() {
-        if !conn.exists(&redis_key).await? {
-            let mut sql_conn = SqliteConnectOptions::from_str(cfg.get_database_location())?
-                .read_only(true)
-                .connect()
-                .await?;
-            if let Some((users,)) =
-                sqlx::query_as::<_, (String,)>(r#"SELECT "users" FROM "repos" WHERE "repo" = ? "#)
-                    .bind(repo)
-                    .fetch_optional(&mut sql_conn)
-                    .await?
-            {
-                let users = users.split_whitespace().collect::<Vec<&str>>();
-                conn.sadd(&redis_key, users).await?;
-            }
+    if !repo.is_empty() && !conn.exists(&redis_key).await? {
+        let mut sql_conn = SqliteConnectOptions::from_str(cfg.get_database_location())?
+            .read_only(true)
+            .connect()
+            .await?;
+        if let Some((users,)) =
+            sqlx::query_as::<_, (String,)>(r#"SELECT "users" FROM "repos" WHERE "repo" = ? "#)
+                .bind(repo)
+                .fetch_optional(&mut sql_conn)
+                .await?
+        {
+            let users = users.split_whitespace().collect::<Vec<&str>>();
+            conn.sadd(&redis_key, users).await?;
         }
     }
 
@@ -504,16 +504,14 @@ async fn cmd_repo_user_control(
     let redis_key = format!("cgit_repo_{}", repo);
     if redis_conn.exists::<_, i32>(&redis_key).await? == 0 {
         redis_conn.sadd::<_, _, i32>(&redis_key, users).await?;
-    } else {
-        if is_delete {
-            if clear_all {
-                redis_conn.del::<_, i32>(&redis_key).await?;
-            } else {
-                redis_conn.srem::<_, _, i32>(&redis_key, user).await?;
-            }
+    } else if is_delete {
+        if clear_all {
+            redis_conn.del::<_, i32>(&redis_key).await?;
         } else {
-            redis_conn.sadd::<_, _, i32>(&redis_key, user).await?;
+            redis_conn.srem::<_, _, i32>(&redis_key, user).await?;
         }
+    } else {
+        redis_conn.sadd::<_, _, i32>(&redis_key, user).await?;
     }
 
     if !clear_all {
@@ -526,6 +524,67 @@ async fn cmd_repo_user_control(
         );
     } else {
         println!("Clear all users from repository {} ACL", repo);
+    }
+
+    Ok(())
+}
+
+async fn cmd_list_repos_acl(arg_matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
+    let repo = arg_matches.value_of("repo").unwrap_or("");
+
+    let mut conn = SqliteConnectOptions::from_str(cfg.get_database_location())?
+        .read_only(true)
+        .connect()
+        .await?;
+
+    if repo.is_empty() {
+        let (length,) = sqlx::query_as::<_, (i32,)>(r#"SELECT COUNT(*) FROM "repos""#)
+            .fetch_optional(&mut conn)
+            .await?
+            .unwrap_or((0,));
+
+        println!(
+            "There is total {} {} in database",
+            length,
+            if length == 1 {
+                "repository"
+            } else {
+                "repositories"
+            },
+        );
+
+        let mut iter =
+            sqlx::query_as::<_, (String, String)>(r#"SELECT * FROM "repos""#).fetch(&mut conn);
+        while let Some(Ok((repo, users))) = iter.next().await {
+            println!(
+                "{}: {}",
+                repo,
+                users
+                    .split_whitespace()
+                    .into_iter()
+                    .collect::<Vec<&str>>()
+                    .join(",")
+            )
+        }
+    } else {
+        let ret =
+            sqlx::query_as::<_, (String, String)>(r#"SELECT * FROM "repos" WHERE "repo" = ?"#)
+                .bind(repo)
+                .fetch_optional(&mut conn)
+                .await?;
+        if let Some((repo, users)) = ret {
+            println!(
+                "{}: {}",
+                repo,
+                users
+                    .split_whitespace()
+                    .into_iter()
+                    .collect::<Vec<&str>>()
+                    .join(",")
+            )
+        } else {
+            println!("Repository {} not register in database", repo)
+        }
     }
 
     Ok(())
@@ -581,7 +640,9 @@ async fn async_main(arg_matches: ArgMatches<'_>) -> Result<i32> {
         ("repodel", Some(matches)) => {
             cmd_repo_user_control(matches, cfg, true).await?;
         }
-        // TODO: other repository rated command
+        ("repos", Some(matches)) => {
+            cmd_list_repos_acl(matches, cfg).await?;
+        }
         _ => {}
     }
     Ok(0)
@@ -692,11 +753,10 @@ fn main() -> Result<()> {
         .encoder(Box::new(PatternEncoder::new(
             "{d(%Y-%m-%d %H:%M:%S)}- {h({l})} - {m}{n}",
         )))
-        .build(env::var("RUST_LOG_FILE").unwrap_or("/tmp/auth.log".to_string()))?;
+        .build(env::var("LOG_FILE").unwrap_or_else(|_| "/var/cache/cgit/auth.log".to_string()))?;
 
     let config = log4rs::Config::builder()
         .appender(Appender::builder().build("logfile", Box::new(logfile)))
-        //.logger(log4rs::config::Logger::builder().build("sqlx::query", log::LevelFilter::Warn))
         .logger(
             log4rs::config::Logger::builder().build("handlebars::render", log::LevelFilter::Warn),
         )
@@ -710,6 +770,7 @@ fn main() -> Result<()> {
         )?;
 
     log4rs::init_config(config)?;
+
     log::debug!(
         "{}",
         env::args()
@@ -719,307 +780,9 @@ fn main() -> Result<()> {
             .join(" ")
     );
 
-    process_arguments()?;
+    if let Err(e) = process_arguments() {
+        log::error!("{:?}", e);
+    };
 
     Ok(())
-}
-
-#[cfg(test)]
-mod test {
-    use crate::datastructures::{rand_str, Config, TestSuite};
-    use crate::{cmd_add_user, cmd_authenticate_cookie, cmd_init, cmd_repo_user_control};
-    use crate::{get_arg_matches, IOModule};
-    use argon2::{
-        password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
-        Argon2,
-    };
-    use redis::AsyncCommands;
-    use std::io::{Read, Write};
-    use std::path::Path;
-    use std::path::PathBuf;
-    use std::thread::sleep;
-    use std::time::Duration;
-
-    #[test]
-    fn test_argon2() {
-        use rand_core::OsRng;
-        let passwd = b"hunter2";
-        let salt = SaltString::generate(&mut OsRng);
-
-        let argon2 = Argon2::default();
-
-        argon2.hash_password_simple(passwd, salt.as_ref()).unwrap();
-    }
-
-    #[test]
-    fn test_argon2_verify() {
-        let passwd = b"hunter2";
-        let parsed_hash = PasswordHash::new("$argon2id$v=19$m=4096,t=3,p=1$szYDnoQSVPmXq+RD2LneBw$fRETH//iCQuIX+SgjYPdZ9iIbM8gEy9fBjTJ/KFFJNM").unwrap();
-        let argon2 = Argon2::default();
-        assert!(argon2.verify_password(passwd, &parsed_hash).is_ok())
-    }
-
-    async fn async_test_redis() -> anyhow::Result<()> {
-        let redis_conn = redis::Client::open("redis://127.0.0.1/")?;
-        let mut conn = redis_conn.get_async_connection().await?;
-
-        let s = rand_str(crate::datastructures::COOKIE_LENGTH);
-        conn.set_ex::<_, _, String>("auth_test", &s, 60).await?;
-
-        assert!(conn.exists::<_, bool>("auth_test").await?);
-
-        assert_eq!(conn.get::<_, String>("auth_test").await?, s);
-
-        conn.del("auth_test").await?;
-
-        assert_eq!(conn.exists::<_, bool>("auth_test").await?, false);
-        Ok(())
-    }
-
-    #[test]
-    fn test_redis() {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(async_test_redis())
-            .unwrap();
-    }
-
-    fn test_auth_post() -> String {
-        let correct_input = br#"redirect=/&username=hunter2&password=hunter2"#;
-        let matches = get_arg_matches(Some(vec![
-            "a",
-            "authenticate-post",
-            "",
-            "POST",
-            "p=login",
-            "https://git.example.com/?p=login",
-            "/",
-            "git.example.com",
-            "",
-            "",
-            "login",
-            "/?p=login",
-            "/?p=login",
-        ]));
-        let mut output = Vec::new();
-        let mut module = IOModule {
-            reader: &correct_input[..],
-            writer: &mut output,
-        };
-
-        let cfg = Config::generate_test_config();
-
-        match matches.subcommand() {
-            ("authenticate-post", Some(matches)) => tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap()
-                .block_on(module.cmd_authenticate_post(matches, cfg))
-                .unwrap(),
-            _ => {}
-        }
-
-        String::from_utf8(output).unwrap()
-    }
-
-    #[test]
-    fn test_01_auth_failure() {
-        let out = test_auth_post();
-        assert!(out.starts_with("Status: 403"));
-        assert!(out.ends_with("\n\n"));
-    }
-
-    #[test]
-    fn test_00_init_database() {
-        let tmp_dir = Path::new("test");
-
-        if tmp_dir.exists() {
-            std::fs::remove_dir_all(tmp_dir).unwrap();
-        }
-        std::fs::create_dir(tmp_dir).unwrap();
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(cmd_init(Config::generate_test_config()))
-            .unwrap();
-        std::fs::File::create("test/DATABASE_INITED").unwrap();
-    }
-
-    fn lock(path: &std::path::PathBuf, sleep_length: usize) {
-        for _ in 0..(sleep_length * 100) {
-            sleep(Duration::from_millis(10));
-            if path.exists() {
-                break;
-            }
-        }
-
-        if !path.exists() {
-            panic!("Can't get lock from {}", path.to_str().unwrap())
-        }
-    }
-
-    #[test]
-    fn test_02_insert_user() {
-        lock(&PathBuf::from("test/DATABASE_INITED"), 3);
-        let matches = crate::get_arg_matches(Some(vec!["a", "adduser", "hunter2", "hunter2"]));
-        match matches.subcommand() {
-            ("adduser", Some(matches)) => {
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .unwrap()
-                    .block_on(cmd_add_user(matches, Config::generate_test_config()))
-                    .unwrap();
-                std::fs::File::create("test/USER_WRITTEN").unwrap();
-            }
-            _ => unreachable!(),
-        }
-        assert!(Path::new("test/COMMIT").exists())
-    }
-
-    #[test]
-    fn test_03_insert_repo() {
-        lock(&PathBuf::from("test/USER_WRITTEN"), 5);
-        let matches = crate::get_arg_matches(Some(vec!["a", "repoadd", "test", "hunter2"]));
-        match matches.subcommand() {
-            ("repoadd", Some(matches)) => {
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .unwrap()
-                    .block_on(cmd_repo_user_control(matches, Config::generate_test_config(), false))
-                    .unwrap();
-                std::fs::File::create("test/REPO_USER_ADDED").unwrap();
-            }
-            _ => unreachable!()
-        }
-    }
-
-    #[test]
-    fn test_91_auth_pass() {
-        lock(&PathBuf::from("test/REPO_USER_ADDED"), 7);
-
-        let s = test_auth_post();
-
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .open("test/RESPONSE")
-            .unwrap();
-        file.write_all(s.as_bytes()).unwrap();
-
-        assert!(s.starts_with("Status: 302"));
-        assert!(s.ends_with("\n\n"));
-        assert!(!Path::new("test/COPIED").exists());
-    }
-
-    #[test]
-    fn test_92_authenticate_cookie() {
-        test_authenticate_cookie("test");
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_93_authenticate_cookie() {
-        test_authenticate_cookie("repo");
-    }
-
-    fn test_authenticate_cookie(repo: &str) {
-        lock(&PathBuf::from("test/RESPONSE"), 15);
-        let mut buffer = String::new();
-
-        let mut file = std::fs::File::open("test/RESPONSE").unwrap();
-        file.read_to_string(&mut buffer).unwrap();
-
-        let buffer = buffer;
-
-        let mut cookie = "";
-
-        for line in buffer.lines().map(|x| x.trim()) {
-            if !line.starts_with("Set-Cookie") {
-                continue;
-            }
-            let (_, value) = line.split_once(":").unwrap();
-            let (value, _) = value.split_once(";").unwrap();
-            cookie = value.trim();
-            break;
-        }
-
-        let matches = get_arg_matches(Some(vec![
-            "a",
-            "authenticate-cookie",
-            cookie,
-            "GET",
-            "",
-            "https://git.example.com/",
-            "/",
-            "git.example.com",
-            "on",
-            repo,
-            "",
-            "/",
-            "/?p=login",
-        ]));
-        let result = match matches.subcommand() {
-            ("authenticate-cookie", Some(matches)) => tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap()
-                .block_on(cmd_authenticate_cookie(
-                    matches,
-                    Config::generate_test_config(),
-                ))
-                .unwrap(),
-            _ => unreachable!(),
-        };
-        assert!(result);
-    }
-
-    fn write_to_specify_file(path: &PathBuf, data: &[u8]) -> Result<(), std::io::Error> {
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(path)?;
-        file.write_all(data)?;
-        file.sync_all()?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_02_protected_repo_parser() {
-        let tmpdir = tempdir::TempDir::new("test").unwrap();
-
-        let another_file_path = format!(
-            "include={}/REPO_SETTING # TEST\ncgit-simple-auth-protect=none",
-            tmpdir.path().to_str().unwrap()
-        );
-        write_to_specify_file(&tmpdir.path().join("CFG"), another_file_path.as_bytes()).unwrap();
-        write_to_specify_file(
-            &tmpdir.path().join("REPO_SETTING"),
-            b"repo.url=test\nrepo.protect=true",
-        )
-        .unwrap();
-
-        let cfg = Config::load_from_path(tmpdir.path().join("CFG"));
-
-        assert!(cfg.check_repo_protect("test"));
-        assert!(!cfg.query_is_all_protected());
-
-        write_to_specify_file(
-            &tmpdir.path().join("REPO_SETTING"),
-            b"repo.protect=true\nrepo.url=test",
-        )
-        .unwrap();
-
-        let cfg = Config::load_from_path(tmpdir.path().join("CFG"));
-
-        assert!(!cfg.check_repo_protect("test"));
-        assert!(!cfg.query_is_all_protected());
-
-        tmpdir.close().unwrap();
-    }
 }
