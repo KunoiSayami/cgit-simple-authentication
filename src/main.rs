@@ -25,7 +25,7 @@ mod test;
 use crate::datastructures::{Config, Cookie, FormData, TestSuite};
 use anyhow::Result;
 use argon2::password_hash::PasswordHash;
-use clap::{App, Arg, ArgMatches, SubCommand};
+use clap::{App, AppSettings, Arg, ArgMatches, SubCommand};
 use handlebars::Handlebars;
 use log4rs::append::file::FileAppender;
 use log4rs::config::{Appender, Root};
@@ -128,6 +128,7 @@ async fn cmd_authenticate_cookie(matches: &ArgMatches<'_>, cfg: Config) -> Resul
     if !repo.is_empty() && !conn.exists(&redis_key).await? {
         let mut sql_conn = SqliteConnectOptions::from_str(cfg.get_database_location())?
             .read_only(true)
+            .disable_statement_logging()
             .connect()
             .await?;
         if let Some((users,)) =
@@ -146,6 +147,7 @@ async fn cmd_authenticate_cookie(matches: &ArgMatches<'_>, cfg: Config) -> Resul
             .get::<_, String>(format!("cgit_auth_{}", cookie.get_key()))
             .await
         {
+            log::debug!("Cookie is valid");
             if cookie.eq_body(r.as_str()) {
                 if repo.is_empty() {
                     return Ok(true);
@@ -616,31 +618,40 @@ async fn async_main(arg_matches: ArgMatches<'_>) -> Result<i32> {
         ("body", Some(matches)) => {
             cmd_body(matches, cfg).await;
         }
-        ("init", Some(_matches)) => {
-            cmd_init(cfg).await?;
-        }
-        ("adduser", Some(matches)) => {
-            cmd_add_user(matches, cfg).await?;
-        }
-        ("users", Some(_matches)) => {
-            cmd_list_user(cfg).await?;
-        }
-        ("deluser", Some(matches)) => {
-            cmd_delete_user(matches, cfg).await?;
-        }
-        ("reset", Some(matches)) => {
-            cmd_reset_database(matches, cfg).await?;
-        }
-        ("upgrade", Some(_matches)) => {
-            cmd_upgrade_database(cfg).await?;
-        }
-        ("repoadd", Some(matches)) => cmd_repo_user_control(matches, cfg, false).await?,
-        ("repodel", Some(matches)) => {
-            cmd_repo_user_control(matches, cfg, true).await?;
-        }
-        ("repos", Some(matches)) => {
-            cmd_list_repos_acl(matches, cfg).await?;
-        }
+        ("user", Some(matches)) => match matches.subcommand() {
+            ("add", Some(matches)) => {
+                cmd_add_user(matches, cfg).await?;
+            }
+            ("del", Some(matches)) => {
+                cmd_delete_user(matches, cfg).await?;
+            }
+            ("list", Some(_matches)) => {
+                cmd_list_user(cfg).await?;
+            }
+            _ => {}
+        },
+        ("database", Some(matches)) => match matches.subcommand() {
+            ("init", Some(_matches)) => {
+                cmd_init(cfg).await?;
+            }
+            ("upgrade", Some(_matches)) => {
+                cmd_upgrade_database(cfg).await?;
+            }
+            ("reset", Some(matches)) => {
+                cmd_reset_database(matches, cfg).await?;
+            }
+            _ => {}
+        },
+        ("repo", Some(matches)) => match matches.subcommand() {
+            ("add", Some(matches)) => cmd_repo_user_control(matches, cfg, false).await?,
+            ("del", Some(matches)) => {
+                cmd_repo_user_control(matches, cfg, true).await?;
+            }
+            ("list", Some(matches)) => {
+                cmd_list_repos_acl(matches, cfg).await?;
+            }
+            _ => {}
+        },
         _ => {}
     }
     Ok(0)
@@ -667,61 +678,94 @@ fn get_arg_matches(arguments: Option<Vec<&str>>) -> ArgMatches {
         .subcommand(
             SubCommand::with_name("authenticate-cookie")
                 .about("Processing authenticated cookie")
-                .args(sub_args),
+                .args(sub_args)
+                .setting(AppSettings::Hidden),
         )
         .subcommand(
             SubCommand::with_name("authenticate-post")
                 .about("Processing posted username and password")
-                .args(sub_args),
+                .args(sub_args)
+                .setting(AppSettings::Hidden),
         )
         .subcommand(
             SubCommand::with_name("body")
                 .about("Return the login form")
-                .args(sub_args),
-        )
-        .subcommand(SubCommand::with_name("init").about("Init sqlite database"))
-        .subcommand(SubCommand::with_name("users").about("List all register user in database"))
-        .subcommand(
-            SubCommand::with_name("adduser")
-                .about("Add user to database")
-                .arg(Arg::with_name("user").required(true))
-                .arg(Arg::with_name("password").required(true)),
+                .args(sub_args)
+                .setting(AppSettings::Hidden),
         )
         .subcommand(
-            SubCommand::with_name("deluser")
-                .about("Delete user from database")
-                .arg(Arg::with_name("user").required(true)),
+            SubCommand::with_name("database")
+                .about("Database rated commands")
+                .subcommand(
+                    SubCommand::with_name("init")
+                        .about("Init sqlite database")
+                        .display_order(0),
+                )
+                .subcommand(
+                    SubCommand::with_name("reset")
+                        .about("Reset database")
+                        .arg(Arg::with_name("confirm").long("confirm"))
+                        .display_order(0),
+                )
+                .subcommand(
+                    SubCommand::with_name("upgrade")
+                        .about("Upgrade database from v2(v0.3.x) to v3(^v0.4.x)")
+                        .display_order(0),
+                )
+                .display_order(0),
         )
         .subcommand(
-            SubCommand::with_name("reset")
-                .about("Reset database")
-                .arg(Arg::with_name("confirm").long("confirm")),
+            SubCommand::with_name("user")
+                .about("Users rated commands")
+                .subcommand(
+                    SubCommand::with_name("add")
+                        .about("Add user to database")
+                        .arg(Arg::with_name("user").required(true))
+                        .arg(Arg::with_name("password").required(true))
+                        .display_order(0),
+                )
+                .subcommand(
+                    SubCommand::with_name("del")
+                        .about("Delete user from database")
+                        .arg(Arg::with_name("user").required(true))
+                        .display_order(0),
+                )
+                .subcommand(
+                    SubCommand::with_name("list")
+                        .about("List all users")
+                        .display_order(0),
+                )
+                .display_order(0),
         )
         .subcommand(
-            SubCommand::with_name("upgrade")
-                .about("Upgrade database from v2(v0.3.x) to v3(^v0.4.x)"),
-        )
-        .subcommand(
-            SubCommand::with_name("repoadd")
-                .about("Add user to repository")
-                .arg(Arg::with_name("repo").required(true))
-                .arg(Arg::with_name("user").required(true)),
-        )
-        .subcommand(
-            SubCommand::with_name("repodel")
-                .about("Del user from repository")
-                .arg(Arg::with_name("repo").required(true))
-                .arg(Arg::with_name("user").takes_value(true))
-                .arg(
-                    Arg::with_name("clear-all")
-                        .long("--clear-all")
-                        .conflicts_with("user"),
-                ),
-        )
-        .subcommand(
-            SubCommand::with_name("repos")
-                .about("Show all repositories or only show specify repository detail")
-                .arg(Arg::with_name("repo").takes_value(true)),
+            SubCommand::with_name("repo")
+                .about("Repository ACL rated commands")
+                .subcommand(
+                    SubCommand::with_name("add")
+                        .about("Add user to repository")
+                        .arg(Arg::with_name("repo").required(true))
+                        .arg(Arg::with_name("user").required(true))
+                        .display_order(0),
+                )
+                .subcommand(
+                    SubCommand::with_name("del")
+                        .about("Del user from repository")
+                        .arg(Arg::with_name("repo").required(true))
+                        .arg(Arg::with_name("user").takes_value(true))
+                        .arg(
+                            Arg::with_name("clear-all")
+                                .long("clear-all")
+                                .conflicts_with("user"),
+                        )
+                        .display_order(0),
+                )
+                .subcommand(
+                    SubCommand::with_name("list")
+                        .about("Show all repositories or only show specify repository detail")
+                        .arg(Arg::with_name("repo").takes_value(true))
+                        .display_order(0),
+                )
+                .display_order(0),
         );
 
     let matches = if let Some(args) = arguments {

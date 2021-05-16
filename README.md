@@ -25,12 +25,47 @@ cgit-simple-auth-full-protect=true
 
 Available options for repositories:
 
-_Should set `cgit-simple-auth-full-protect=false`_ 
+_You should set `cgit-simple-auth-full-protect=false`_
 
 ```conf
 repo.url=test
 # Enable protect for this repository
 repo.protect=true
+```
+
+## Usage
+
+You should initialize your database first
+
+```shell
+cargo run -- database init
+```
+
+Then add user with
+
+```shell
+cargo run -- user add admin hunter2
+```
+
+More usage information, see `--help`.
+
+## Program help
+
+```plain
+Simple Authentication Filter for cgit
+
+USAGE:
+    cgit-simple-authentication.exe [SUBCOMMAND]
+
+FLAGS:
+    -h, --help       Prints help information
+    -V, --version    Prints version information
+
+SUBCOMMANDS:
+    database    Database rated commands
+    repo        Repository ACL rated commands
+    user        Users rated commands
+    help        Prints this message or the help of the given subcommand(s)
 ```
 
 ## Source

@@ -19,7 +19,7 @@
  */
 
 #[cfg(test)]
-mod core_test {
+mod core {
     use crate::datastructures::{rand_str, Config, TestSuite};
     use crate::{cmd_add_user, cmd_authenticate_cookie, cmd_init, cmd_repo_user_control};
     use crate::{get_arg_matches, IOModule};
@@ -158,17 +158,20 @@ mod core_test {
     #[test]
     fn test_02_insert_user() {
         lock(&PathBuf::from("test/DATABASE_INITED"), 3);
-        let matches = crate::get_arg_matches(Some(vec!["a", "adduser", "hunter2", "hunter2"]));
+        let matches = crate::get_arg_matches(Some(vec!["a", "user", "add", "hunter2", "hunter2"]));
         match matches.subcommand() {
-            ("adduser", Some(matches)) => {
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .unwrap()
-                    .block_on(cmd_add_user(matches, Config::generate_test_config()))
-                    .unwrap();
-                std::fs::File::create("test/USER_WRITTEN").unwrap();
-            }
+            ("user", Some(matches)) => match matches.subcommand() {
+                ("add", Some(matches)) => {
+                    tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .unwrap()
+                        .block_on(cmd_add_user(matches, Config::generate_test_config()))
+                        .unwrap();
+                    std::fs::File::create("test/USER_WRITTEN").unwrap();
+                }
+                _ => unreachable!(),
+            },
             _ => unreachable!(),
         }
         assert!(Path::new("test/COMMIT").exists())
@@ -178,25 +181,28 @@ mod core_test {
     fn test_03_insert_repo() {
         lock(&PathBuf::from("test/USER_WRITTEN"), 5);
         let args = vec![
-            vec!["a", "repoadd", "test", "hunter2"],
-            vec!["a", "repoadd", "repo", "hunter"],
+            vec!["a", "repo", "add", "test", "hunter2"],
+            vec!["a", "repo", "add", "repo", "hunter"],
         ];
         for x in args {
             let matches = crate::get_arg_matches(Some(x));
             match matches.subcommand() {
-                ("repoadd", Some(matches)) => {
-                    tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .unwrap()
-                        .block_on(cmd_repo_user_control(
-                            matches,
-                            Config::generate_test_config(),
-                            false,
-                        ))
-                        .unwrap();
-                    std::fs::File::create("test/REPO_USER_ADDED").unwrap();
-                }
+                ("repo", Some(matches)) => match matches.subcommand() {
+                    ("add", Some(matches)) => {
+                        tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .unwrap()
+                            .block_on(cmd_repo_user_control(
+                                matches,
+                                Config::generate_test_config(),
+                                false,
+                            ))
+                            .unwrap();
+                        std::fs::File::create("test/REPO_USER_ADDED").unwrap();
+                    }
+                    _ => unreachable!(),
+                },
                 _ => unreachable!(),
             }
         }
@@ -227,7 +233,7 @@ mod core_test {
 
     #[test]
     #[should_panic]
-    fn test_93_authenticate_cookie() {
+    fn test_93_authenticate_cookie_failure() {
         test_authenticate_cookie("repo", Some("test/COOKIE_TEST_2"));
     }
 
@@ -297,7 +303,7 @@ mod core_test {
     }
 
     #[test]
-    fn test_02_protected_repo_parser() {
+    fn test_protected_repo_parser() {
         let tmpdir = tempdir::TempDir::new("test").unwrap();
 
         let another_file_path = format!(
