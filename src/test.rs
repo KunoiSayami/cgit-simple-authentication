@@ -212,7 +212,7 @@ mod core {
     fn test_91_auth_pass() {
         lock(&PathBuf::from("test/REPO_USER_ADDED"), 10);
         // If process is too fast, this function may got Database locked error
-        sleep(Duration::from_millis(50));
+        sleep(Duration::from_millis(10));
 
         let s = test_auth_post();
 
@@ -309,7 +309,7 @@ mod core {
         let tmpdir = tempdir::TempDir::new("test").unwrap();
 
         let another_file_path = format!(
-            "include={}/REPO_SETTING # TEST\ncgit-simple-auth-full-protect=false",
+            "include={}/REPO_SETTING # TEST\ncgit-simple-auth-protect=part",
             tmpdir.path().to_str().unwrap()
         );
         write_to_specify_file(&tmpdir.path().join("CFG"), another_file_path.as_bytes()).unwrap();
@@ -321,8 +321,10 @@ mod core {
 
         let cfg = Config::load_from_path(tmpdir.path().join("CFG"));
 
-        assert!(cfg.check_repo_protect("test"));
-        assert!(!cfg.query_is_all_protected());
+        assert!(cfg.check_repo_protect("test"), "struct: {:#?}", cfg);
+        assert!(!cfg.get_white_list_mode_status());
+        // TODO:
+        //assert!(!cfg.query_is_all_protected());
 
         write_to_specify_file(
             &tmpdir.path().join("REPO_SETTING"),
@@ -333,7 +335,9 @@ mod core {
         let cfg = Config::load_from_path(tmpdir.path().join("CFG"));
 
         assert!(!cfg.check_repo_protect("test"));
-        assert!(!cfg.query_is_all_protected());
+        assert!(!cfg.get_white_list_mode_status());
+        // TODO:
+        //assert!(!cfg.query_is_all_protected());
 
         tmpdir.close().unwrap();
     }

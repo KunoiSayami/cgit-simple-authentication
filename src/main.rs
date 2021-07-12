@@ -109,6 +109,7 @@ async fn cmd_authenticate_cookie(matches: &ArgMatches<'_>, cfg: Config) -> Resul
 
     let mut bypass = false;
 
+    // TODO: bypass root not working properly if we select sort mode
     if cfg.bypass_root && current_url.eq("/") && repo.is_empty() {
         bypass = true;
     }
@@ -147,7 +148,8 @@ async fn cmd_authenticate_cookie(matches: &ArgMatches<'_>, cfg: Config) -> Resul
             .get::<_, String>(format!("cgit_auth_{}", cookie.get_key()))
             .await
         {
-            log::debug!("Cookie is valid");
+            // TODO: Extend cookie ttl in each authenticate request
+            //log::debug!("Cookie is valid");
             if cookie.eq_body(r.as_str()) {
                 if repo.is_empty() {
                     return Ok(true);

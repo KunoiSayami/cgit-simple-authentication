@@ -79,26 +79,7 @@ pub struct Config {
     database: String,
     pub bypass_root: bool,
     pub(crate) test: bool,
-
-    /// To set specify repository protect, You should setup repo's protect attribute
-    /// First, set cgit-simple-auth-protect to none in /etc/cgitrc file
-    ///
-    /// # Examples
-    ///
-    /// In /etc/cgitrc:
-    /// ```conf
-    /// cgit-simple-auth-full-protect=false
-    /// ```
-    ///
-    /// In repo.conf
-    /// ```conf
-    /// repo.url=test
-    /// repo.protect=true
-    /// ```
-    ///
-    /// Default behavior is protect all repository
-    protect_all: bool,
-    protected_repos: Vec<String>,
+    protect_config: ProtectSettings,
 }
 
 impl Default for Config {
@@ -108,8 +89,7 @@ impl Default for Config {
             database: DEFAULT_DATABASE_LOCATION.to_string(),
             bypass_root: false,
             test: false,
-            protect_all: true,
-            protected_repos: Default::default(),
+            protect_config: Default::default()
         }
     }
 }
@@ -125,7 +105,8 @@ impl Config {
         let mut cookie_ttl: u64 = DEFAULT_COOKIE_TTL;
         let mut database: &str = "/etc/cgit/auth.db";
         let mut bypass_root: bool = false;
-        let mut protect_all: bool = true;
+        let mut protect_enabled: bool = true;
+        let mut protect_white_list_mode: bool = true;
 
         for line in file.lines() {
             let line = line.trim();
@@ -144,69 +125,33 @@ impl Config {
                 "cookie-ttl" => cookie_ttl = value.parse().unwrap_or(DEFAULT_COOKIE_TTL),
                 "database" => database = value,
                 "bypass-root" => bypass_root = value.to_lowercase().eq("true"),
-                "full-protect" => protect_all = !value.to_lowercase().eq("false"),
+                "protect" => {
+                    match value.to_lowercase().as_str() {
+                        "full" => {
+                            protect_enabled = true;
+                            protect_white_list_mode = true;
+                        }
+                        "part" => {
+                            protect_enabled = true;
+                            protect_white_list_mode = false;
+                        }
+                        "none" => {
+                            protect_enabled = false;
+                        }
+                        _ => {}
+                    }
+                },
                 _ => {}
             }
         }
-
-        let protected_repos = if !protect_all {
-            Self::load_protect_repos_from_file(path)
-        } else {
-            Default::default()
-        };
 
         Self {
             cookie_ttl,
             database: database.to_string(),
             bypass_root,
             test: false,
-            protect_all,
-            protected_repos,
+            protect_config: ProtectSettings::from_path(protect_enabled, protect_white_list_mode, path)
         }
-    }
-
-    pub fn load_protect_repos_from_file<P: AsRef<Path>>(path: P) -> Vec<String> {
-        let context = read_to_string(path).unwrap();
-
-        let mut protect_repos = Vec::new();
-
-        let mut current_repo: &str = "";
-
-        for line in context.lines() {
-            let line = line.trim();
-            if line.starts_with('#') || !line.contains('=') {
-                continue;
-            }
-
-            let (key, value) = if line.contains('#') {
-                line.split_once('#')
-                    .unwrap()
-                    .0
-                    .trim()
-                    .split_once('=')
-                    .unwrap()
-            } else {
-                line.split_once('=').unwrap()
-            };
-
-            if key.eq("repo.url") {
-                current_repo = value.trim();
-                continue;
-            }
-
-            if key.eq("repo.protect")
-                && value.trim().to_lowercase().eq("true")
-                && !current_repo.is_empty()
-            {
-                protect_repos.push(current_repo.to_string());
-            }
-
-            if key.eq("include") {
-                let r = Self::load_protect_repos_from_file(value);
-                protect_repos.extend(r)
-            }
-        }
-        protect_repos
     }
 
     pub fn get_database_location(&self) -> &str {
@@ -276,15 +221,12 @@ impl Config {
     }
 
     pub fn check_repo_protect(&self, repo: &str) -> bool {
-        if self.protect_all {
-            return true;
-        }
-        self.protected_repos.iter().any(|x| x.eq(repo))
+        self.protect_config.check_repo_protect(repo)
     }
 
     #[cfg(test)]
-    pub(crate) fn query_is_all_protected(&self) -> bool {
-        self.protect_all
+    pub(crate) fn get_white_list_mode_status(&self) -> bool {
+        self.protect_config.get_white_list_mode_status()
     }
 }
 
@@ -295,11 +237,159 @@ impl TestSuite for Config {
             bypass_root: false,
             cookie_ttl: DEFAULT_COOKIE_TTL,
             test: true,
-            protect_all: false,
-            protected_repos: vec!["test".to_string(), "repo".to_string()],
+            protect_config: ProtectSettings::generate_test_config()
         }
     }
 }
+
+
+
+/// To set specify repository protect, You should setup repo's protect attribute
+/// First, set cgit-simple-auth-protect to none in /etc/cgitrc file
+///
+/// # Examples
+///
+/// In /etc/cgitrc:
+/// ```conf
+/// # Available value: full, part, none
+/// cgit-simple-auth-protect=none
+/// ```
+///
+/// If option set to `part`, only some repositories will be protected
+/// which is enabled protect manually by `repo.protect=true`
+///
+/// If option set to `full`, vice versa. You can manually disable protection
+/// by set `repo.protect=false`
+///
+///
+/// In repo.conf
+/// ```conf
+/// repo.url=test
+/// repo.protect=true
+/// ```
+///
+/// If option set to `none`, all protection will be disabled.
+///
+/// Default behavior is protect all repository
+
+#[derive(Debug, Clone, Default)]
+struct ProtectSettings {
+    protect_enabled: bool,
+    /// If white list mode set to true,
+    /// Only repository in repos is unprotected
+    protect_white_list_mode: bool,
+    repos: Vec<String>
+}
+
+impl ProtectSettings {
+    pub fn from_path<P: AsRef<Path>>(protect_enabled: bool, protect_white_list_mode: bool, path: P) -> Self {
+        Self {
+            protect_enabled,
+            protect_white_list_mode,
+            repos: if protect_enabled {
+                Self::load_repos_from_path(protect_white_list_mode, path)
+            } else {
+                Default::default()
+            }
+        }
+    }
+
+    fn load_repos_from_path<P: AsRef<Path>>(white_list_mode: bool, path: P) -> Vec<String> {
+        let context = read_to_string(path).unwrap();
+
+        Self::load_repos_from_context(white_list_mode, &context)
+
+    }
+
+    fn load_repos_from_context(white_list_mode: bool, s: &String) -> Vec<String> {
+        let mut repos: Vec<String> = Default::default();
+
+        let mut last_insert_repo = "";
+        let mut last_repo = "";
+
+        for line in s.trim().lines() {
+            let line = line.trim();
+
+            if line.is_empty() || line.starts_with('#') || !line.contains('=') {
+                continue
+            }
+
+            let (key, value) = if line.contains('#') {
+                line.split_once('#')
+                    .unwrap()
+                    .0
+                    .trim()
+                    .split_once('=')
+                    .unwrap()
+            } else {
+                line.split_once('=').unwrap()
+            };
+
+            if key.eq("include") {
+                repos.extend(Self::load_repos_from_path(white_list_mode, value));
+                continue
+            }
+
+            if !key.starts_with("repo.") {
+                continue
+            }
+
+            let (_, key) = key.split_once(".").unwrap();
+
+
+            if key.eq("url") {
+                last_repo = value;
+            }
+
+            if key.eq("protect") {
+                if last_repo.is_empty() {
+                    continue
+                }
+                let value = value.to_lowercase();
+
+                if (white_list_mode && value.eq("false")) || (!white_list_mode && value.eq("true")) {
+                    if last_insert_repo.eq(last_repo) {
+                        log::warn!("Found duplicate options in repo {}", last_repo);
+                        continue
+                    }
+                    repos.push(last_repo.to_string());
+                    last_insert_repo = last_repo;
+                }
+            }
+
+        }
+        repos
+    }
+
+    pub fn check_repo_protect(&self, repo: &str) -> bool {
+        if !self.protect_enabled {
+            return false;
+        }
+        let ret = self.repos.iter().any(|x| x.eq(repo));
+        if self.protect_white_list_mode {
+            !ret
+        } else {
+            ret
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn get_white_list_mode_status(&self) -> bool {
+        self.protect_white_list_mode
+    }
+
+}
+
+impl TestSuite for ProtectSettings {
+    fn generate_test_config() -> Self {
+        Self {
+            protect_enabled: true,
+            protect_white_list_mode: false,
+            repos: vec!["test".to_string(), "repo".to_string()],
+        }
+    }
+}
+
 
 #[derive(Debug, Clone, Default)]
 pub struct FormData {

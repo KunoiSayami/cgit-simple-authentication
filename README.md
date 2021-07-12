@@ -20,12 +20,13 @@ cgit-simple-auth-database=/etc/cgit/auth.db
 # Should authenticate in repositories root view
 cgit-simple-auth-bypass-root=false
 # Should enable authenticate in all repository
-cgit-simple-auth-full-protect=true
+# Available options: full, part, none
+cgit-simple-auth-protect=full
 ```
 
 Available options for repositories:
 
-_You should set `cgit-simple-auth-full-protect=false`_
+_You should set `cgit-simple-auth-protect=part`_
 
 ```conf
 repo.url=test
