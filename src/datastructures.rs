@@ -89,7 +89,7 @@ impl Default for Config {
             database: DEFAULT_DATABASE_LOCATION.to_string(),
             bypass_root: false,
             test: false,
-            protect_config: Default::default()
+            protect_config: Default::default(),
         }
     }
 }
@@ -125,21 +125,19 @@ impl Config {
                 "cookie-ttl" => cookie_ttl = value.parse().unwrap_or(DEFAULT_COOKIE_TTL),
                 "database" => database = value,
                 "bypass-root" => bypass_root = value.to_lowercase().eq("true"),
-                "protect" => {
-                    match value.to_lowercase().as_str() {
-                        "full" => {
-                            protect_enabled = true;
-                            protect_white_list_mode = true;
-                        }
-                        "part" => {
-                            protect_enabled = true;
-                            protect_white_list_mode = false;
-                        }
-                        "none" => {
-                            protect_enabled = false;
-                        }
-                        _ => {}
+                "protect" => match value.to_lowercase().as_str() {
+                    "full" => {
+                        protect_enabled = true;
+                        protect_white_list_mode = true;
                     }
+                    "part" => {
+                        protect_enabled = true;
+                        protect_white_list_mode = false;
+                    }
+                    "none" => {
+                        protect_enabled = false;
+                    }
+                    _ => {}
                 },
                 _ => {}
             }
@@ -150,7 +148,11 @@ impl Config {
             database: database.to_string(),
             bypass_root,
             test: false,
-            protect_config: ProtectSettings::from_path(protect_enabled, protect_white_list_mode, path)
+            protect_config: ProtectSettings::from_path(
+                protect_enabled,
+                protect_white_list_mode,
+                path,
+            ),
         }
     }
 
@@ -237,12 +239,10 @@ impl TestSuite for Config {
             bypass_root: false,
             cookie_ttl: DEFAULT_COOKIE_TTL,
             test: true,
-            protect_config: ProtectSettings::generate_test_config()
+            protect_config: ProtectSettings::generate_test_config(),
         }
     }
 }
-
-
 
 /// To set specify repository protect, You should setup repo's protect attribute
 /// First, set cgit-simple-auth-protect to none in /etc/cgitrc file
@@ -278,11 +278,15 @@ struct ProtectSettings {
     /// If white list mode set to true,
     /// Only repository in repos is unprotected
     protect_white_list_mode: bool,
-    repos: Vec<String>
+    repos: Vec<String>,
 }
 
 impl ProtectSettings {
-    pub fn from_path<P: AsRef<Path>>(protect_enabled: bool, protect_white_list_mode: bool, path: P) -> Self {
+    pub fn from_path<P: AsRef<Path>>(
+        protect_enabled: bool,
+        protect_white_list_mode: bool,
+        path: P,
+    ) -> Self {
         Self {
             protect_enabled,
             protect_white_list_mode,
@@ -290,7 +294,7 @@ impl ProtectSettings {
                 Self::load_repos_from_path(protect_white_list_mode, path)
             } else {
                 Default::default()
-            }
+            },
         }
     }
 
@@ -298,7 +302,6 @@ impl ProtectSettings {
         let context = read_to_string(path).unwrap();
 
         Self::load_repos_from_context(white_list_mode, &context)
-
     }
 
     fn load_repos_from_context(white_list_mode: bool, s: &String) -> Vec<String> {
@@ -311,7 +314,7 @@ impl ProtectSettings {
             let line = line.trim();
 
             if line.is_empty() || line.starts_with('#') || !line.contains('=') {
-                continue
+                continue;
             }
 
             let (key, value) = if line.contains('#') {
@@ -327,15 +330,14 @@ impl ProtectSettings {
 
             if key.eq("include") {
                 repos.extend(Self::load_repos_from_path(white_list_mode, value));
-                continue
+                continue;
             }
 
             if !key.starts_with("repo.") {
-                continue
+                continue;
             }
 
             let (_, key) = key.split_once(".").unwrap();
-
 
             if key.eq("url") {
                 last_repo = value;
@@ -343,20 +345,20 @@ impl ProtectSettings {
 
             if key.eq("protect") {
                 if last_repo.is_empty() {
-                    continue
+                    continue;
                 }
                 let value = value.to_lowercase();
 
-                if (white_list_mode && value.eq("false")) || (!white_list_mode && value.eq("true")) {
+                if (white_list_mode && value.eq("false")) || (!white_list_mode && value.eq("true"))
+                {
                     if last_insert_repo.eq(last_repo) {
                         log::warn!("Found duplicate options in repo {}", last_repo);
-                        continue
+                        continue;
                     }
                     repos.push(last_repo.to_string());
                     last_insert_repo = last_repo;
                 }
             }
-
         }
         repos
     }
@@ -377,7 +379,6 @@ impl ProtectSettings {
     pub(crate) fn get_white_list_mode_status(&self) -> bool {
         self.protect_white_list_mode
     }
-
 }
 
 impl TestSuite for ProtectSettings {
@@ -389,7 +390,6 @@ impl TestSuite for ProtectSettings {
         }
     }
 }
-
 
 #[derive(Debug, Clone, Default)]
 pub struct FormData {
