@@ -323,8 +323,7 @@ mod core {
 
         assert!(cfg.check_repo_protect("test"), "struct: {:#?}", cfg);
         assert!(!cfg.get_white_list_mode_status());
-        // TODO:
-        //assert!(!cfg.query_is_all_protected());
+        assert!(!cfg.query_is_all_protected());
 
         write_to_specify_file(
             &tmpdir.path().join("REPO_SETTING"),
@@ -336,8 +335,7 @@ mod core {
 
         assert!(!cfg.check_repo_protect("test"));
         assert!(!cfg.get_white_list_mode_status());
-        // TODO:
-        //assert!(!cfg.query_is_all_protected());
+        assert!(!cfg.query_is_all_protected());
 
         tmpdir.close().unwrap();
     }

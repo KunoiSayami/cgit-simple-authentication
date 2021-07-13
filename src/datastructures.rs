@@ -230,6 +230,11 @@ impl Config {
     pub(crate) fn get_white_list_mode_status(&self) -> bool {
         self.protect_config.get_white_list_mode_status()
     }
+
+    #[cfg(test)]
+    pub(crate) fn query_is_all_protected(&self) -> bool {
+        self.protect_config.query_is_all_protected()
+    }
 }
 
 impl TestSuite for Config {
@@ -378,6 +383,11 @@ impl ProtectSettings {
     #[cfg(test)]
     pub(crate) fn get_white_list_mode_status(&self) -> bool {
         self.protect_white_list_mode
+    }
+
+    #[cfg(test)]
+    pub(crate) fn query_is_all_protected(&self) -> bool {
+        self.protect_enabled && self.protect_white_list_mode && self.repos.is_empty()
     }
 }
 
