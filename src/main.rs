@@ -89,7 +89,7 @@ impl<R: BufRead, W: Write> IOModule<R, W> {
             writeln!(
                 &mut self.writer,
                 "Set-Cookie: cgit_auth={}; Domain={}; Max-Age={}; HttpOnly{}",
-                cookie_value, domain, cfg.cookie_ttl, cookie_suffix
+                cookie_value, domain, cfg.cookie_ttl * 10, cookie_suffix
             )?;
         } else {
             writeln!(&mut self.writer, "Status: 403 Forbidden")?;
@@ -105,12 +105,11 @@ impl<R: BufRead, W: Write> IOModule<R, W> {
 async fn cmd_authenticate_cookie(matches: &ArgMatches<'_>, cfg: Config) -> Result<bool> {
     let cookies = matches.value_of("http-cookie").unwrap_or("");
     let repo = matches.value_of("repo").unwrap_or("");
-    let current_url = matches.value_of("current-url").unwrap_or("");
+    /*let current_url = matches.value_of("current-url").unwrap_or("");*/
 
     let mut bypass = false;
 
-    // TODO: bypass root not working properly if we select sort mode
-    if cfg.bypass_root && current_url.eq("/") && repo.is_empty() {
+    if cfg.bypass_root /*&& current_url.eq("/")*/ && repo.is_empty() {
         bypass = true;
     }
 
@@ -148,8 +147,11 @@ async fn cmd_authenticate_cookie(matches: &ArgMatches<'_>, cfg: Config) -> Resul
             .get::<_, String>(format!("cgit_auth_{}", cookie.get_key()))
             .await
         {
-            // TODO: Extend cookie ttl in each authenticate request
-            //log::debug!("Cookie is valid");
+            conn.expire::<_, bool>(
+                format!("cgit_auth_{}", cookie.get_key()),
+                cfg.cookie_ttl as usize,
+            )
+            .await?;
             if cookie.eq_body(r.as_str()) {
                 if repo.is_empty() {
                     return Ok(true);
@@ -282,7 +284,7 @@ async fn cmd_add_user(matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
 
     sqlx::query(r#"INSERT INTO "accounts" VALUES (?, ?, ?) "#)
         .bind(user)
-        .bind(FormData::get_string_argon2_hash(&passwd)?)
+        .bind(FormData::gen_string_argon2_hash(&passwd)?)
         .bind(&uid)
         .execute(&mut conn)
         .await?;

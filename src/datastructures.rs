@@ -372,12 +372,7 @@ impl ProtectSettings {
         if !self.protect_enabled {
             return false;
         }
-        let ret = self.repos.iter().any(|x| x.eq(repo));
-        if self.protect_white_list_mode {
-            !ret
-        } else {
-            ret
-        }
+        self.protect_white_list_mode != self.repos.iter().any(|x| x.eq(repo))
     }
 
     #[cfg(test)]
@@ -415,7 +410,7 @@ impl FormData {
         }
     }
 
-    pub fn get_string_argon2_hash(s: &str) -> Result<String> {
+    pub fn gen_string_argon2_hash(s: &str) -> Result<String> {
         let passwd = s.as_bytes();
         let salt = SaltString::generate(&mut OsRng);
 
