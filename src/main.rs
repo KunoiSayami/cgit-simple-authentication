@@ -60,6 +60,11 @@ impl<R: BufRead, W: Write> IOModule<R, W> {
 
         if let Err(ref e) = ret {
             eprintln!("{:?}", e);
+            #[cfg(test)]
+            eprintln!(
+                "If database locked error occurs frequently, \
+            please use environment DISK_WAIT_TIME to specify longer time."
+            );
             log::error!("{:?}", e)
         }
 
@@ -89,7 +94,10 @@ impl<R: BufRead, W: Write> IOModule<R, W> {
             writeln!(
                 &mut self.writer,
                 "Set-Cookie: cgit_auth={}; Domain={}; Max-Age={}; HttpOnly{}",
-                cookie_value, domain, cfg.cookie_ttl * 10, cookie_suffix
+                cookie_value,
+                domain,
+                cfg.cookie_ttl * 10,
+                cookie_suffix
             )?;
         } else {
             writeln!(&mut self.writer, "Status: 403 Forbidden")?;

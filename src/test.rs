@@ -212,7 +212,12 @@ mod core {
     fn test_91_auth_pass() {
         lock(&PathBuf::from("test/REPO_USER_ADDED"), 10);
         // If process is too fast, this function may got Database locked error
-        sleep(Duration::from_millis(10));
+        sleep(Duration::from_millis(
+            option_env!("DISK_WAIT_TIME")
+                .unwrap_or("10")
+                .parse()
+                .unwrap_or(10),
+        ));
 
         let s = test_auth_post();
 
