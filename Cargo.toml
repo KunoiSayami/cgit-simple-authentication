@@ -1,7 +1,7 @@
 [package]
 name = "cgit-simple-authentication"
-version = "3.0.6"
-authors = ["KunoiSayami <46131041+KunoiSayami@users.noreply.github.com>"]
+version = "3.0.7"
+authors = ["KunoiSayami <i@leanhe.dev>"]
 edition = "2018"
 
 [dependencies]
