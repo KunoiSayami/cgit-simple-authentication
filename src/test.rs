@@ -20,6 +20,7 @@
 
 #[cfg(test)]
 mod core {
+    use std::borrow::BorrowMut;
     use crate::datastructures::{rand_str, Config, TestSuite};
     use crate::{cmd_add_user, cmd_authenticate_cookie, cmd_init, cmd_repo_user_control};
     use crate::{get_arg_matches, IOModule};
@@ -365,5 +366,16 @@ mod core {
             .unwrap()
             .block_on(clear_redis_setting())
             .unwrap();
+    }
+
+    #[test]
+    fn test_pam() {
+        let service = "system-login";
+        let user = option_env!("pam_user").unwrap_or("user");
+        let password = option_env!("pam_password").unwrap_or("password");
+
+        let mut auth = pam::Authenticator::with_password(service).unwrap();
+        auth.get_handler().borrow_mut().set_credentials(user, password);
+        assert!(auth.authenticate().is_ok() && auth.open_session().is_ok())
     }
 }

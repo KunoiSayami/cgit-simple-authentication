@@ -22,6 +22,10 @@ cgit-simple-auth-bypass-root=false
 # Should enable authenticate in all repository
 # Available options: full, part, none
 cgit-simple-auth-protect=full
+# Use PAM to provide verification
+# Available options: false(disable PAM)
+# Or 'system-auth', 'system-login' etc. (write the method you need)
+cgit-simple-auth-use-pam=false
 ```
 
 Available options for repositories:

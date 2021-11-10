@@ -26,10 +26,12 @@ use argon2::{
 use rand::Rng;
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
+use std::borrow::{BorrowMut, Cow};
 use std::fmt::Formatter;
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use sqlx::ConnectOptions;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use url::form_urlencoded;
 
@@ -74,10 +76,46 @@ pub(crate) trait TestSuite {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct PAMConfig {
+    use_pam: bool,
+    provider: String,
+}
+
+impl From<&str> for PAMConfig {
+    fn from(s: &str) -> Self {
+        let use_pam = ! s.to_lowercase().eq("false");
+        Self {
+            use_pam,
+            provider: s.to_string()
+        }
+    }
+}
+
+impl PAMConfig {
+    fn get_enabled(&self) -> bool {
+        self.use_pam
+    }
+
+    fn get_provider(&self) -> &String {
+        &self.provider
+    }
+}
+
+impl Default for PAMConfig {
+    fn default() -> Self {
+        Self {
+            use_pam: false,
+            provider: "system-auth".to_string()
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Config {
     pub cookie_ttl: u64,
     database: String,
     pub bypass_root: bool,
+    pam_config: PAMConfig,
     pub(crate) test: bool,
     protect_config: ProtectSettings,
 }
@@ -88,6 +126,7 @@ impl Default for Config {
             cookie_ttl: DEFAULT_COOKIE_TTL,
             database: DEFAULT_DATABASE_LOCATION.to_string(),
             bypass_root: false,
+            pam_config: Default::default(),
             test: false,
             protect_config: Default::default(),
         }
@@ -107,6 +146,8 @@ impl Config {
         let mut bypass_root: bool = false;
         let mut protect_enabled: bool = true;
         let mut protect_white_list_mode: bool = true;
+        let mut use_pam: &str = "false";
+        //let mut skip_user_access_check: bool = false;
 
         for line in file.lines() {
             let line = line.trim();
@@ -125,6 +166,7 @@ impl Config {
                 "cookie-ttl" => cookie_ttl = value.parse().unwrap_or(DEFAULT_COOKIE_TTL),
                 "database" => database = value,
                 "bypass-root" => bypass_root = value.to_lowercase().eq("true"),
+                "use-pam" => use_pam = value,
                 "protect" => match value.to_lowercase().as_str() {
                     "full" => {
                         protect_enabled = true;
@@ -147,6 +189,7 @@ impl Config {
             cookie_ttl,
             database: database.to_string(),
             bypass_root,
+            pam_config: PAMConfig::from(use_pam),
             test: false,
             protect_config: ProtectSettings::from_path(
                 protect_enabled,
@@ -235,6 +278,14 @@ impl Config {
     pub(crate) fn query_is_all_protected(&self) -> bool {
         self.protect_config.query_is_all_protected()
     }
+
+    fn get_pam_config(&self) -> &PAMConfig {
+        &self.pam_config
+    }
+
+    pub fn get_test_status(&self) -> bool {
+        self.test
+    }
 }
 
 impl TestSuite for Config {
@@ -243,6 +294,7 @@ impl TestSuite for Config {
             database: "test/tmp.db".to_string(),
             bypass_root: false,
             cookie_ttl: DEFAULT_COOKIE_TTL,
+            pam_config: Default::default(),
             test: true,
             protect_config: ProtectSettings::generate_test_config(),
         }
@@ -427,11 +479,8 @@ impl FormData {
         self.hash = Default::default();
     }
 
-    pub fn verify_password(&self, password_hash: &PasswordHash) -> bool {
-        let argon2_alg = Argon2::default();
-        argon2_alg
-            .verify_password(self.password.as_bytes(), password_hash)
-            .is_ok()
+    pub async fn authorize(&self, authorizer: &Box<dyn Authorizer>) -> anyhow::Result<bool> {
+        authorizer.verify(&self.user, &self.password).await
     }
 
     pub fn set_user(&mut self, user: String) {
@@ -556,5 +605,147 @@ impl std::fmt::Display for Cookie {
             self.timestamp, self.randint, self.user, self.reversed
         );
         write!(f, "{}", base64::encode(s))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum AuthorizerType {
+    PAM,
+    PASSWORD,
+}
+
+#[async_trait::async_trait]
+pub trait Authorizer {
+    fn method(&self) -> AuthorizerType {
+        AuthorizerType::PASSWORD
+    }
+    async fn verify(&self, name: &str, password: &str) -> anyhow::Result<bool>;
+}
+
+#[async_trait::async_trait]
+impl<F: ?Sized> Authorizer for Box<F>
+    where
+        F: Authorizer + Sync + Send,
+{
+    fn method(&self) -> AuthorizerType {
+        (**self).method()
+    }
+
+    async fn verify(&self, user: &str, password: &str) -> anyhow::Result<bool> {
+        (**self).verify(user, password).await
+    }
+}
+
+
+pub struct WrapConfigure {
+    config: Config,
+    authorizer: Box<dyn Authorizer>,
+}
+
+impl From<Config> for WrapConfigure {
+    fn from(cfg: Config) -> Self {
+        let authorizer: Box<dyn Authorizer> = if cfg.get_pam_config().get_enabled() {
+            Box::new(PAMAuthorizer::from(cfg.get_pam_config()))
+        } else {
+            Box::new(SQLAuthorizer::from(&cfg))
+        };
+        Self {
+            config: cfg,
+            authorizer
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PAMAuthorizer {
+    provider: String,
+}
+
+impl From<&PAMConfig> for PAMAuthorizer {
+    fn from(cfg: &PAMConfig) -> Self {
+        Self {
+            provider: cfg.get_provider().clone()
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Authorizer for PAMAuthorizer {
+    fn method(&self) -> AuthorizerType {
+        AuthorizerType::PAM
+    }
+
+    async fn verify(&self, user: &str, password: &str) -> anyhow::Result<bool> {
+        let service = self.provider.as_str();
+
+        let mut auth = pam::Authenticator::with_password(service).unwrap();
+        auth.get_handler().borrow_mut().set_credentials(user, password);
+        Ok(auth.authenticate().is_ok() && auth.open_session().is_ok())
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SQLAuthorizer {
+    database_location: String,
+}
+
+impl From<&Config> for SQLAuthorizer {
+    fn from(cfg: &Config) -> Self {
+        Self {
+            database_location: cfg.get_copied_database_location().to_str().unwrap().to_string()
+        }
+    }
+}
+
+impl WrapConfigure {
+    pub(crate) async fn hook(&self) -> anyhow::Result<()> {
+        let cfg = &self.config;
+        if !cfg.get_test_status() {
+            let last_copied = cfg.get_last_copy_timestamp().await.unwrap_or(0);
+            if last_copied == 0 || cfg.get_last_commit_timestamp().await.unwrap_or(0) != last_copied {
+                std::fs::copy(
+                    cfg.get_database_location(),
+                    cfg.get_copied_database_location(),
+                )?;
+                cfg.write_last_copy_timestamp().await?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn get_authorizer(&self) -> &Box<dyn Authorizer> {
+        &self.authorizer
+    }
+
+    pub(crate) fn get_config(&self) -> &Config {
+        &self.config
+    }
+}
+
+
+#[async_trait::async_trait]
+impl Authorizer for SQLAuthorizer {
+    async fn verify(&self, user: &str, password: &str) -> anyhow::Result<bool> {
+        let mut conn = sqlx::sqlite::SqliteConnectOptions::from_str(
+            self.database_location.as_str()
+        )?
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Off)
+            .log_statements(log::LevelFilter::Trace)
+            .connect()
+            .await?;
+
+        let (passwd_hash,) =
+            sqlx::query_as::<_, (String,)>(r#"SELECT "password" FROM "accounts" WHERE "user" = ?"#)
+                .bind(user)
+                .fetch_one(&mut conn)
+                .await?;
+
+        let parsed_hash = PasswordHash::new(passwd_hash.as_str()).unwrap();
+        let argon2_alg = Argon2::default();
+
+        Ok(
+        argon2_alg
+            .verify_password(password.as_bytes(), &parsed_hash)
+            .is_ok())
     }
 }

@@ -22,9 +22,8 @@ mod database;
 mod datastructures;
 mod test;
 
-use crate::datastructures::{Config, Cookie, FormData, TestSuite};
+use crate::datastructures::{AuthorizerType, Config, Cookie, FormData, TestSuite, WrapConfigure};
 use anyhow::Result;
-use argon2::password_hash::PasswordHash;
 use clap::{App, AppSettings, Arg, ArgMatches, SubCommand};
 use handlebars::Handlebars;
 use log4rs::append::file::FileAppender;
@@ -56,6 +55,7 @@ impl<R: BufRead, W: Write> IOModule<R, W> {
         //log::debug!("{}", buffer);
         let data = datastructures::FormData::from(buffer);
 
+        let cfg = WrapConfigure::from(cfg);
         let ret = verify_login(&cfg, &data).await;
 
         if let Err(ref e) = ret {
@@ -76,7 +76,7 @@ impl<R: BufRead, W: Write> IOModule<R, W> {
             conn.set_ex::<_, _, String>(
                 format!("cgit_auth_{}", cookie.get_key()),
                 cookie.get_body(),
-                cfg.cookie_ttl as usize,
+                cfg.get_config().cookie_ttl as usize,
             )
             .await?;
 
@@ -96,7 +96,7 @@ impl<R: BufRead, W: Write> IOModule<R, W> {
                 "Set-Cookie: cgit_auth={}; Domain={}; Max-Age={}; HttpOnly{}",
                 cookie_value,
                 domain,
-                cfg.cookie_ttl * 10,
+                cfg.get_config().cookie_ttl * 10,
                 cookie_suffix
             )?;
         } else {
@@ -210,34 +210,14 @@ async fn cmd_init(cfg: Config) -> Result<()> {
     Ok(())
 }
 
-async fn verify_login(cfg: &Config, data: &FormData) -> Result<bool> {
-    if !cfg.test {
-        let last_copied = cfg.get_last_copy_timestamp().await.unwrap_or(0);
-        if last_copied == 0 || cfg.get_last_commit_timestamp().await.unwrap_or(0) != last_copied {
-            std::fs::copy(
-                cfg.get_database_location(),
-                cfg.get_copied_database_location(),
-            )?;
-            cfg.write_last_copy_timestamp().await?;
+async fn verify_login(cfg: &WrapConfigure, data: &FormData) -> Result<bool> {
+    match cfg.get_authorizer().method() {
+        AuthorizerType::PASSWORD => {
+            cfg.hook().await?;
         }
+        _ => {}
     }
-
-    let mut conn = sqlx::sqlite::SqliteConnectOptions::from_str(
-        cfg.get_copied_database_location().to_str().unwrap(),
-    )?
-    .journal_mode(sqlx::sqlite::SqliteJournalMode::Off)
-    .log_statements(log::LevelFilter::Trace)
-    .connect()
-    .await?;
-
-    let (passwd_hash,) =
-        sqlx::query_as::<_, (String,)>(r#"SELECT "password" FROM "accounts" WHERE "user" = ?"#)
-            .bind(data.get_user())
-            .fetch_one(&mut conn)
-            .await?;
-
-    let parsed_hash = PasswordHash::new(passwd_hash.as_str()).unwrap();
-    Ok(data.verify_password(&parsed_hash))
+    data.authorize(cfg.get_authorizer()).await
 }
 
 #[derive(Serialize)]
