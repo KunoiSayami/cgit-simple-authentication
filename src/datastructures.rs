@@ -26,12 +26,12 @@ use argon2::{
 use rand::Rng;
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
+use sqlx::ConnectOptions;
 use std::borrow::{BorrowMut, Cow};
 use std::fmt::Formatter;
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use sqlx::ConnectOptions;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use url::form_urlencoded;
 
@@ -83,10 +83,10 @@ pub(crate) struct PAMConfig {
 
 impl From<&str> for PAMConfig {
     fn from(s: &str) -> Self {
-        let use_pam = ! s.to_lowercase().eq("false");
+        let use_pam = !s.to_lowercase().eq("false");
         Self {
             use_pam,
-            provider: s.to_string()
+            provider: s.to_string(),
         }
     }
 }
@@ -105,7 +105,7 @@ impl Default for PAMConfig {
     fn default() -> Self {
         Self {
             use_pam: false,
-            provider: "system-auth".to_string()
+            provider: "system-auth".to_string(),
         }
     }
 }
@@ -361,7 +361,7 @@ impl ProtectSettings {
         Self::load_repos_from_context(white_list_mode, &context)
     }
 
-    fn load_repos_from_context(white_list_mode: bool, s: &String) -> Vec<String> {
+    fn load_repos_from_context(white_list_mode: bool, s: &str) -> Vec<String> {
         let mut repos: Vec<String> = Default::default();
 
         let mut last_insert_repo = "";
@@ -611,21 +611,21 @@ impl std::fmt::Display for Cookie {
 #[derive(Debug, Clone)]
 pub enum AuthorizerType {
     PAM,
-    PASSWORD,
+    Password,
 }
 
 #[async_trait::async_trait]
 pub trait Authorizer {
     fn method(&self) -> AuthorizerType {
-        AuthorizerType::PASSWORD
+        AuthorizerType::Password
     }
     async fn verify(&self, name: &str, password: &str) -> anyhow::Result<bool>;
 }
 
 #[async_trait::async_trait]
-impl<F: ?Sized> Authorizer for Box<F>
-    where
-        F: Authorizer + Sync + Send,
+impl<F: ?Sized + Sync + Send> Authorizer for Box<F>
+where
+    F: Authorizer + Sync + Send,
 {
     fn method(&self) -> AuthorizerType {
         (**self).method()
@@ -635,7 +635,6 @@ impl<F: ?Sized> Authorizer for Box<F>
         (**self).verify(user, password).await
     }
 }
-
 
 pub struct WrapConfigure {
     config: Config,
@@ -651,7 +650,7 @@ impl From<Config> for WrapConfigure {
         };
         Self {
             config: cfg,
-            authorizer
+            authorizer,
         }
     }
 }
@@ -664,7 +663,7 @@ struct PAMAuthorizer {
 impl From<&PAMConfig> for PAMAuthorizer {
     fn from(cfg: &PAMConfig) -> Self {
         Self {
-            provider: cfg.get_provider().clone()
+            provider: cfg.get_provider().clone(),
         }
     }
 }
@@ -679,7 +678,9 @@ impl Authorizer for PAMAuthorizer {
         let service = self.provider.as_str();
 
         let mut auth = pam::Authenticator::with_password(service).unwrap();
-        auth.get_handler().borrow_mut().set_credentials(user, password);
+        auth.get_handler()
+            .borrow_mut()
+            .set_credentials(user, password);
         Ok(auth.authenticate().is_ok() && auth.open_session().is_ok())
     }
 }
@@ -692,7 +693,11 @@ struct SQLAuthorizer {
 impl From<&Config> for SQLAuthorizer {
     fn from(cfg: &Config) -> Self {
         Self {
-            database_location: cfg.get_copied_database_location().to_str().unwrap().to_string()
+            database_location: cfg
+                .get_copied_database_location()
+                .to_str()
+                .unwrap()
+                .to_string(),
         }
     }
 }
@@ -702,7 +707,8 @@ impl WrapConfigure {
         let cfg = &self.config;
         if !cfg.get_test_status() {
             let last_copied = cfg.get_last_copy_timestamp().await.unwrap_or(0);
-            if last_copied == 0 || cfg.get_last_commit_timestamp().await.unwrap_or(0) != last_copied {
+            if last_copied == 0 || cfg.get_last_commit_timestamp().await.unwrap_or(0) != last_copied
+            {
                 std::fs::copy(
                     cfg.get_database_location(),
                     cfg.get_copied_database_location(),
@@ -722,17 +728,15 @@ impl WrapConfigure {
     }
 }
 
-
 #[async_trait::async_trait]
 impl Authorizer for SQLAuthorizer {
     async fn verify(&self, user: &str, password: &str) -> anyhow::Result<bool> {
-        let mut conn = sqlx::sqlite::SqliteConnectOptions::from_str(
-            self.database_location.as_str()
-        )?
-            .journal_mode(sqlx::sqlite::SqliteJournalMode::Off)
-            .log_statements(log::LevelFilter::Trace)
-            .connect()
-            .await?;
+        let mut conn =
+            sqlx::sqlite::SqliteConnectOptions::from_str(self.database_location.as_str())?
+                .journal_mode(sqlx::sqlite::SqliteJournalMode::Off)
+                .log_statements(log::LevelFilter::Trace)
+                .connect()
+                .await?;
 
         let (passwd_hash,) =
             sqlx::query_as::<_, (String,)>(r#"SELECT "password" FROM "accounts" WHERE "user" = ?"#)
@@ -743,8 +747,7 @@ impl Authorizer for SQLAuthorizer {
         let parsed_hash = PasswordHash::new(passwd_hash.as_str()).unwrap();
         let argon2_alg = Argon2::default();
 
-        Ok(
-        argon2_alg
+        Ok(argon2_alg
             .verify_password(password.as_bytes(), &parsed_hash)
             .is_ok())
     }

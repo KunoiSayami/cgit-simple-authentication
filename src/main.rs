@@ -211,11 +211,8 @@ async fn cmd_init(cfg: Config) -> Result<()> {
 }
 
 async fn verify_login(cfg: &WrapConfigure, data: &FormData) -> Result<bool> {
-    match cfg.get_authorizer().method() {
-        AuthorizerType::PASSWORD => {
-            cfg.hook().await?;
-        }
-        _ => {}
+    if let AuthorizerType::Password = cfg.get_authorizer().method() {
+        cfg.hook().await?;
     }
     data.authorize(cfg.get_authorizer()).await
 }
