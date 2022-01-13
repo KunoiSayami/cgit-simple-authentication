@@ -346,7 +346,7 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
 name = "cgit-simple-authentication"
-version = "4.0.0-alpha.1"
+version = "4.0.0-alpha.2"
 dependencies = [
  "anyhow",
  "argon2",

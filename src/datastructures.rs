@@ -1,8 +1,5 @@
 /*
- ** Copyright (C) 2021 KunoiSayami
- **
- ** This file is part of cgit-simple-authentication and is released under
- ** the AGPL v3 License: https://www.gnu.org/licenses/agpl-3.0.txt
+ ** Copyright (C) 2021-2022 KunoiSayami
  **
  ** This program is free software: you can redistribute it and/or modify
  ** it under the terms of the GNU Affero General Public License as published by
@@ -28,10 +25,11 @@ use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use sqlx::ConnectOptions;
 use std::borrow::{BorrowMut, Cow};
-use std::fmt::Formatter;
+use std::fmt::{Debug, Formatter};
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use log::error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use url::form_urlencoded;
 
@@ -138,7 +136,7 @@ impl Config {
         Self::load_from_path(DEFAULT_CONFIG_LOCATION)
     }
 
-    pub fn load_from_path<P: AsRef<Path>>(path: P) -> Self {
+    pub fn load_from_path<P: AsRef<Path> + Debug>(path: P) -> Self {
         let file = read_to_string(&path).unwrap_or_default();
 
         let mut cookie_ttl: u64 = DEFAULT_COOKIE_TTL;
@@ -339,7 +337,7 @@ struct ProtectSettings {
 }
 
 impl ProtectSettings {
-    pub fn from_path<P: AsRef<Path>>(
+    pub fn from_path<P: AsRef<Path> + Debug>(
         protect_enabled: bool,
         protect_white_list_mode: bool,
         path: P,
@@ -355,8 +353,20 @@ impl ProtectSettings {
         }
     }
 
-    fn load_repos_from_path<P: AsRef<Path>>(white_list_mode: bool, path: P) -> Vec<String> {
-        let context = read_to_string(path).unwrap();
+    // TODO: Use Result<> to return
+    fn load_repos_from_path<P: AsRef<Path> + Debug>(white_list_mode: bool, path: P) -> Vec<String> {
+        let context = read_to_string(&path);
+        let context = match context {
+            Ok(context) => context,
+            Err(e) => {
+                error!("Got error while reading {:?}, {:?}", path, e);
+                if let std::io::ErrorKind::NotFound = e.kind() {
+                    error!("File not found, did you forget to perform initialization?");
+                }
+                panic!();
+            }
+
+        };
 
         Self::load_repos_from_context(white_list_mode, &context)
     }
@@ -612,6 +622,15 @@ impl std::fmt::Display for Cookie {
 pub enum AuthorizerType {
     PAM,
     Password,
+}
+
+impl std::fmt::Display for AuthorizerType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", match self {
+            AuthorizerType::PAM => "PAM",
+            AuthorizerType::Password => "PASSWORD",
+        })
+    }
 }
 
 #[async_trait::async_trait]

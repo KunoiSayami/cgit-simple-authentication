@@ -1,8 +1,5 @@
 /*
- ** Copyright (C) 2021 KunoiSayami
- **
- ** This file is part of cgit-simple-authentication and is released under
- ** the AGPL v3 License: https://www.gnu.org/licenses/agpl-3.0.txt
+ ** Copyright (C) 2021-2022 KunoiSayami
  **
  ** This program is free software: you can redistribute it and/or modify
  ** it under the terms of the GNU Affero General Public License as published by
@@ -368,6 +365,7 @@ mod core {
             .unwrap();
     }
 
+    #[ignore]
     #[test]
     fn test_pam() {
         let service = option_env!("pam_service").unwrap_or("system-auth");

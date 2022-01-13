@@ -1,8 +1,5 @@
 /*
- ** Copyright (C) 2021 KunoiSayami
- **
- ** This file is part of cgit-simple-authentication and is released under
- ** the AGPL v3 License: https://www.gnu.org/licenses/agpl-3.0.txt
+ ** Copyright (C) 2021-2022-2022 KunoiSayami
  **
  ** This program is free software: you can redistribute it and/or modify
  ** it under the terms of the GNU Affero General Public License as published by
@@ -20,6 +17,7 @@
 
 mod database;
 mod datastructures;
+#[cfg(test)]
 mod test;
 
 use crate::datastructures::{AuthorizerType, Config, Cookie, FormData, TestSuite, WrapConfigure};
@@ -56,6 +54,7 @@ impl<R: BufRead, W: Write> IOModule<R, W> {
         let data = datastructures::FormData::from(buffer);
 
         let cfg = WrapConfigure::from(cfg);
+        log::trace!("Method is {}", cfg.get_authorizer().method());
         let ret = verify_login(&cfg, &data).await;
 
         if let Err(ref e) = ret {
@@ -134,11 +133,15 @@ async fn cmd_authenticate_cookie(matches: &ArgMatches<'_>, cfg: Config) -> Resul
 
     let redis_key = format!("cgit_repo_{}", repo);
     if !repo.is_empty() && !conn.exists(&redis_key).await? {
-        let mut sql_conn = SqliteConnectOptions::from_str(cfg.get_database_location())?
+        let sql_conn = SqliteConnectOptions::from_str(cfg.get_database_location())?
             .read_only(true)
             .disable_statement_logging()
             .connect()
-            .await?;
+            .await;
+        if let Err(ref e) = sql_conn {
+            log::error!("Got error while open sqlite connection: {:?}\nDatabase location: {}", e, cfg.get_database_location());
+        }
+        let mut sql_conn = sql_conn?;
         if let Some((users,)) =
             sqlx::query_as::<_, (String,)>(r#"SELECT "users" FROM "repos" WHERE "repo" = ? "#)
                 .bind(repo)
@@ -151,6 +154,7 @@ async fn cmd_authenticate_cookie(matches: &ArgMatches<'_>, cfg: Config) -> Resul
     }
 
     if let Ok(Some(cookie)) = Cookie::load_from_request(cookies) {
+        log::debug!("Cookie is {:?}", &cookie);
         if let Ok(r) = conn
             .get::<_, String>(format!("cgit_auth_{}", cookie.get_key()))
             .await
@@ -782,11 +786,18 @@ fn process_arguments() -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    let logfile_path = env::var("LOG_FILE").unwrap_or_else(|_| "/var/cache/cgit/auth.log".to_string());
     let logfile = FileAppender::builder()
         .encoder(Box::new(PatternEncoder::new(
             "{d(%Y-%m-%d %H:%M:%S)}- {h({l})} - {m}{n}",
         )))
-        .build(env::var("LOG_FILE").unwrap_or_else(|_| "/var/cache/cgit/auth.log".to_string()))?;
+        .build(&logfile_path);
+    let logfile = match logfile {
+        Ok(f) => f,
+        Err(e) => {
+            return Err(anyhow::Error::msg(format!("Got error while append to {}: {:?}", &logfile_path, e)))
+        }
+    };
 
     let config = log4rs::Config::builder()
         .appender(Appender::builder().build("logfile", Box::new(logfile)))
