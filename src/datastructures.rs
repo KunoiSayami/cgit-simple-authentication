@@ -17,11 +17,10 @@
 
 use anyhow::Result;
 use argon2::{
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
     Argon2,
 };
 use rand::Rng;
-use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use sqlx::ConnectOptions;
 use std::borrow::{BorrowMut, Cow};
@@ -479,7 +478,7 @@ impl FormData {
         let argon2_alg = Argon2::default();
 
         Ok(argon2_alg
-            .hash_password_simple(passwd, salt.as_ref())
+            .hash_password(passwd, salt.as_ref())
             .unwrap()
             .to_string())
     }

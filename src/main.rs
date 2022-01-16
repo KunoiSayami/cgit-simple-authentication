@@ -135,6 +135,7 @@ async fn cmd_authenticate_cookie(matches: &ArgMatches<'_>, cfg: Config) -> Resul
     if !repo.is_empty() && !conn.exists(&redis_key).await? {
         let sql_conn = SqliteConnectOptions::from_str(cfg.get_database_location())?
             .read_only(true)
+            .immutable(true)
             .disable_statement_logging()
             .connect()
             .await;
@@ -378,6 +379,7 @@ async fn cmd_upgrade_database(cfg: Config) -> Result<()> {
 
     let mut origin_conn = SqliteConnectOptions::from_str(v2_path.as_path().to_str().unwrap())?
         .read_only(true)
+        .immutable(true)
         .connect()
         .await?;
 
@@ -529,6 +531,7 @@ async fn cmd_list_repos_acl(arg_matches: &ArgMatches<'_>, cfg: Config) -> Result
 
     let mut conn = SqliteConnectOptions::from_str(cfg.get_database_location())?
         .read_only(true)
+        .immutable(true)
         .connect()
         .await?;
 
