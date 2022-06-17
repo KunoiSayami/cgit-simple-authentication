@@ -6,7 +6,7 @@ edition = "2018"
 
 [dependencies]
 anyhow = "1"
-argon2 = "0.3"
+argon2 = "0.4"
 async-trait = "0.1"
 base64 = "0.13"
 clap = "2.33"
