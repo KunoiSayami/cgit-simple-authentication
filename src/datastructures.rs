@@ -17,9 +17,10 @@
 
 use anyhow::Result;
 use argon2::{
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
+    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
+use log::error;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sqlx::ConnectOptions;
@@ -28,7 +29,6 @@ use std::fmt::{Debug, Formatter};
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use log::error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use url::form_urlencoded;
 
@@ -60,7 +60,7 @@ pub fn rand_str(len: usize) -> String {
 
     let password: String = (0..len)
         .map(|_| {
-            let idx = rng.gen_range(0, CHARSET.len());
+            let idx = rng.gen_range(0..CHARSET.len());
             CHARSET[idx] as char
         })
         .collect();
@@ -364,7 +364,6 @@ impl ProtectSettings {
                 }
                 panic!();
             }
-
         };
 
         Self::load_repos_from_context(white_list_mode, &context)
@@ -625,10 +624,14 @@ pub enum AuthorizerType {
 
 impl std::fmt::Display for AuthorizerType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", match self {
-            AuthorizerType::PAM => "PAM",
-            AuthorizerType::Password => "PASSWORD",
-        })
+        write!(
+            f,
+            "{}",
+            match self {
+                AuthorizerType::PAM => "PAM",
+                AuthorizerType::Password => "PASSWORD",
+            }
+        )
     }
 }
 

@@ -40,7 +40,7 @@ mod core {
 
         let argon2 = Argon2::default();
 
-        argon2.hash_password_simple(passwd, salt.as_ref()).unwrap();
+        argon2.hash_password(passwd, salt.as_ref()).unwrap();
     }
 
     #[test]
@@ -104,7 +104,7 @@ mod core {
         let cfg = Config::generate_test_config();
 
         match matches.subcommand() {
-            ("authenticate-post", Some(matches)) => tokio::runtime::Builder::new_current_thread()
+            Some(("authenticate-post", matches)) => tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .unwrap()
@@ -158,8 +158,8 @@ mod core {
         lock(&PathBuf::from("test/DATABASE_INITED"), 3);
         let matches = crate::get_arg_matches(Some(vec!["a", "user", "add", "hunter2", "hunter2"]));
         match matches.subcommand() {
-            ("user", Some(matches)) => match matches.subcommand() {
-                ("add", Some(matches)) => {
+            Some(("user", matches)) => match matches.subcommand() {
+                Some(("add", matches)) => {
                     tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build()
@@ -185,8 +185,8 @@ mod core {
         for x in args {
             let matches = crate::get_arg_matches(Some(x));
             match matches.subcommand() {
-                ("repo", Some(matches)) => match matches.subcommand() {
-                    ("add", Some(matches)) => {
+                Some(("repo", matches)) => match matches.subcommand() {
+                    Some(("add", matches)) => {
                         tokio::runtime::Builder::new_current_thread()
                             .enable_all()
                             .build()
@@ -279,7 +279,7 @@ mod core {
             "/?p=login",
         ]));
         let result = match matches.subcommand() {
-            ("authenticate-cookie", Some(matches)) => tokio::runtime::Builder::new_current_thread()
+            Some(("authenticate-cookie", matches)) => tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .unwrap()

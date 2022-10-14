@@ -22,7 +22,7 @@ mod test;
 
 use crate::datastructures::{AuthorizerType, Config, Cookie, FormData, TestSuite, WrapConfigure};
 use anyhow::Result;
-use clap::{App, AppSettings, Arg, ArgMatches, SubCommand};
+use clap::{Arg, ArgMatches, Command};
 use handlebars::Handlebars;
 use log4rs::append::file::FileAppender;
 use log4rs::config::{Appender, Root};
@@ -45,7 +45,7 @@ struct IOModule<R, W> {
 
 impl<R: BufRead, W: Write> IOModule<R, W> {
     // Processing the `authenticate-post` called by cgit.
-    async fn cmd_authenticate_post(&mut self, matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
+    async fn cmd_authenticate_post(&mut self, matches: &ArgMatches, cfg: Config) -> Result<()> {
         // Read stdin from upstream.
         let mut buffer = String::new();
         self.reader.read_to_string(&mut buffer)?;
@@ -82,10 +82,17 @@ impl<R: BufRead, W: Write> IOModule<R, W> {
             let cookie_value = cookie.to_string();
 
             let is_secure = matches
-                .value_of("https")
+                .get_one::<String>("https")
+                .map(|s| s.as_str())
                 .map_or(false, |x| matches!(x, "yes" | "on" | "1"));
-            let domain = matches.value_of("http-host").unwrap_or("*");
-            let location = matches.value_of("http-referer").unwrap_or("/");
+            let domain = matches
+                .get_one::<String>("http-host")
+                .map(|s| s.as_str())
+                .unwrap_or("*");
+            let location = matches
+                .get_one::<String>("http-referer")
+                .map(|s| s.as_str())
+                .unwrap_or("/");
             let cookie_suffix = if is_secure { "; secure" } else { "" };
             writeln!(&mut self.writer, "Status: 302 Found")?;
             writeln!(&mut self.writer, "Cache-Control: no-cache, no-store")?;
@@ -109,9 +116,15 @@ impl<R: BufRead, W: Write> IOModule<R, W> {
 }
 
 // Processing the `authenticate-cookie` called by cgit.
-async fn cmd_authenticate_cookie(matches: &ArgMatches<'_>, cfg: Config) -> Result<bool> {
-    let cookies = matches.value_of("http-cookie").unwrap_or("");
-    let repo = matches.value_of("repo").unwrap_or("");
+async fn cmd_authenticate_cookie(matches: &ArgMatches, cfg: Config) -> Result<bool> {
+    let cookies = matches
+        .get_one::<String>("http-cookie")
+        .map(|s| s.as_str())
+        .unwrap_or("");
+    let repo = matches
+        .get_one::<String>("repo")
+        .map(|s| s.as_str())
+        .unwrap_or("");
     /*let current_url = matches.value_of("current-url").unwrap_or("");*/
 
     let mut bypass = false;
@@ -140,7 +153,11 @@ async fn cmd_authenticate_cookie(matches: &ArgMatches<'_>, cfg: Config) -> Resul
             .connect()
             .await;
         if let Err(ref e) = sql_conn {
-            log::error!("Got error while open sqlite connection: {:?}\nDatabase location: {}", e, cfg.get_database_location());
+            log::error!(
+                "Got error while open sqlite connection: {:?}\nDatabase location: {}",
+                e,
+                cfg.get_database_location()
+            );
         }
         let mut sql_conn = sql_conn?;
         if let Some((users,)) =
@@ -191,7 +208,7 @@ async fn cmd_init(cfg: Config) -> Result<()> {
         std::fs::File::create(loc)?;
     }
 
-    let mut conn = sqlx::SqliteConnection::connect(cfg.get_database_location()).await?;
+    let mut conn = SqliteConnection::connect(cfg.get_database_location()).await?;
 
     if exists {
         let rows = sqlx::query(r#"SELECT name FROM sqlite_master WHERE type='table' AND name=?"#)
@@ -230,12 +247,18 @@ pub struct Meta<'a> {
 }
 
 // Processing the `body` called by cgit.
-async fn cmd_body(matches: &ArgMatches<'_>, _cfg: Config) {
+async fn cmd_body(matches: &ArgMatches, _cfg: Config) {
     let source = include_str!("authentication_page.html");
     let handlebars = Handlebars::new();
     let meta = Meta {
-        action: matches.value_of("login-url").unwrap_or(""),
-        redirect: matches.value_of("current-url").unwrap_or(""),
+        action: matches
+            .get_one::<String>("login-url")
+            .map(|s| s.as_str())
+            .unwrap_or(""),
+        redirect: matches
+            .get_one::<String>("current-url")
+            .map(|s| s.as_str())
+            .unwrap_or(""),
         version: env!("CARGO_PKG_VERSION"),
     };
     handlebars
@@ -243,10 +266,16 @@ async fn cmd_body(matches: &ArgMatches<'_>, _cfg: Config) {
         .unwrap();
 }
 
-async fn cmd_add_user(matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
+async fn cmd_add_user(matches: &ArgMatches, cfg: Config) -> Result<()> {
     let re = regex::Regex::new(r"^\w+$").unwrap();
-    let user = matches.value_of("user").unwrap_or("");
-    let passwd = matches.value_of("password").unwrap_or("").to_string();
+    let user = matches
+        .get_one::<String>("user")
+        .map(|s| s.as_str())
+        .unwrap_or("");
+    let passwd = matches
+        .get_one::<String>("password")
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "".to_string());
     if user.is_empty() || passwd.is_empty() {
         return Err(anyhow::Error::msg("Invalid user or password length"));
     }
@@ -261,7 +290,7 @@ async fn cmd_add_user(matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
         ));
     }
 
-    let mut conn = sqlx::SqliteConnection::connect(cfg.get_database_location()).await?;
+    let mut conn = SqliteConnection::connect(cfg.get_database_location()).await?;
 
     let items = sqlx::query(r#"SELECT 1 FROM "accounts" WHERE "user" = ? "#)
         .bind(user)
@@ -272,7 +301,7 @@ async fn cmd_add_user(matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
         return Err(anyhow::Error::msg("User already exists!"));
     }
 
-    let uid = uuid::Uuid::new_v4().to_hyphenated().to_string();
+    let uid = uuid::Uuid::new_v4().to_string();
 
     sqlx::query(r#"INSERT INTO "accounts" VALUES (?, ?, ?) "#)
         .bind(user)
@@ -290,7 +319,7 @@ async fn cmd_add_user(matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
 }
 
 async fn cmd_list_user(cfg: Config) -> Result<()> {
-    let mut conn = sqlx::SqliteConnection::connect(cfg.get_database_location()).await?;
+    let mut conn = SqliteConnection::connect(cfg.get_database_location()).await?;
 
     let (count,) = sqlx::query_as::<_, (i32,)>(r#"SELECT COUNT(*) FROM "accounts""#)
         .fetch_one(&mut conn)
@@ -315,13 +344,16 @@ async fn cmd_list_user(cfg: Config) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_delete_user(matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
-    let user = matches.value_of("user").unwrap_or("");
+async fn cmd_delete_user(matches: &ArgMatches, cfg: Config) -> Result<()> {
+    let user = matches
+        .get_one::<String>("user")
+        .map(|s| s.as_str())
+        .unwrap_or("");
     if user.is_empty() {
         return Err(anyhow::Error::msg("Please input a valid username"));
     }
 
-    let mut conn = sqlx::SqliteConnection::connect(cfg.get_database_location()).await?;
+    let mut conn = SqliteConnection::connect(cfg.get_database_location()).await?;
 
     let items = sqlx::query_as::<_, (i32,)>(r#"SELECT 1 FROM "accounts" WHERE "user" = ?"#)
         .bind(user)
@@ -343,8 +375,8 @@ async fn cmd_delete_user(matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_reset_database(matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
-    if !matches.is_present("confirm") {
+async fn cmd_reset_database(matches: &ArgMatches, cfg: Config) -> Result<()> {
+    if !matches.contains_id("confirm") {
         return Err(anyhow::Error::msg(
             "Please add --confirm argument to process reset",
         ));
@@ -429,15 +461,17 @@ async fn cmd_upgrade_database(cfg: Config) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_repo_user_control(
-    matches: &ArgMatches<'_>,
-    cfg: Config,
-    is_delete: bool,
-) -> Result<()> {
-    let repo = matches.value_of("repo").unwrap_or("");
-    let user = matches.value_of("user").unwrap_or("");
+async fn cmd_repo_user_control(matches: &ArgMatches, cfg: Config, is_delete: bool) -> Result<()> {
+    let repo = matches
+        .get_one::<String>("repo")
+        .map(|s| s.as_str())
+        .unwrap_or("");
+    let user = matches
+        .get_one::<String>("user")
+        .map(|s| s.as_str())
+        .unwrap_or("");
 
-    let clear_all = matches.is_present("clear-all");
+    let clear_all = is_delete && matches.contains_id("clear-all");
 
     if repo.is_empty()
         || (is_delete && !clear_all && user.is_empty())
@@ -526,8 +560,11 @@ async fn cmd_repo_user_control(
     Ok(())
 }
 
-async fn cmd_list_repos_acl(arg_matches: &ArgMatches<'_>, cfg: Config) -> Result<()> {
-    let repo = arg_matches.value_of("repo").unwrap_or("");
+async fn cmd_list_repos_acl(arg_matches: &ArgMatches, cfg: Config) -> Result<()> {
+    let repo = arg_matches
+        .get_one::<String>("repo")
+        .map(|s| s.as_str())
+        .unwrap_or("");
 
     let mut conn = SqliteConnectOptions::from_str(cfg.get_database_location())?
         .read_only(true)
@@ -588,21 +625,21 @@ async fn cmd_list_repos_acl(arg_matches: &ArgMatches<'_>, cfg: Config) -> Result
     Ok(())
 }
 
-async fn async_main(arg_matches: ArgMatches<'_>) -> Result<i32> {
-    let cfg = if std::env::args().any(|x| x.eq("--test")) {
+async fn async_main(arg_matches: ArgMatches) -> Result<i32> {
+    let cfg = if env::args().any(|x| x.eq("--test")) {
         Config::generate_test_config()
     } else {
         Config::new()
     };
     match arg_matches.subcommand() {
-        ("authenticate-cookie", Some(matches)) => {
+        Some(("authenticate-cookie", matches)) => {
             if let Ok(should_pass) = cmd_authenticate_cookie(matches, cfg).await {
                 if should_pass {
                     return Ok(1);
                 }
             }
         }
-        ("authenticate-post", Some(matches)) => {
+        Some(("authenticate-post", matches)) => {
             let stdin = std::io::stdin();
             let input = stdin.lock();
 
@@ -613,39 +650,39 @@ async fn async_main(arg_matches: ArgMatches<'_>) -> Result<i32> {
             };
             module.cmd_authenticate_post(matches, cfg).await?;
         }
-        ("body", Some(matches)) => {
+        Some(("body", matches)) => {
             cmd_body(matches, cfg).await;
         }
-        ("user", Some(matches)) => match matches.subcommand() {
-            ("add", Some(matches)) => {
+        Some(("user", matches)) => match matches.subcommand() {
+            Some(("add", matches)) => {
                 cmd_add_user(matches, cfg).await?;
             }
-            ("del", Some(matches)) => {
+            Some(("del", matches)) => {
                 cmd_delete_user(matches, cfg).await?;
             }
-            ("list", Some(_matches)) => {
+            Some(("list", _matches)) => {
                 cmd_list_user(cfg).await?;
             }
             _ => {}
         },
-        ("database", Some(matches)) => match matches.subcommand() {
-            ("init", Some(_matches)) => {
+        Some(("database", matches)) => match matches.subcommand() {
+            Some(("init", _matches)) => {
                 cmd_init(cfg).await?;
             }
-            ("upgrade", Some(_matches)) => {
+            Some(("upgrade", _matches)) => {
                 cmd_upgrade_database(cfg).await?;
             }
-            ("reset", Some(matches)) => {
+            Some(("reset", matches)) => {
                 cmd_reset_database(matches, cfg).await?;
             }
             _ => {}
         },
-        ("repo", Some(matches)) => match matches.subcommand() {
-            ("add", Some(matches)) => cmd_repo_user_control(matches, cfg, false).await?,
-            ("del", Some(matches)) => {
+        Some(("repo", matches)) => match matches.subcommand() {
+            Some(("add", matches)) => cmd_repo_user_control(matches, cfg, false).await?,
+            Some(("del", matches)) => {
                 cmd_repo_user_control(matches, cfg, true).await?;
             }
-            ("list", Some(matches)) => {
+            Some(("list", matches)) => {
                 cmd_list_repos_acl(matches, cfg).await?;
             }
             _ => {}
@@ -658,109 +695,105 @@ async fn async_main(arg_matches: ArgMatches<'_>) -> Result<i32> {
 fn get_arg_matches(arguments: Option<Vec<&str>>) -> ArgMatches {
     // Sub-arguments for each command, see cgi defines.
     let sub_args = &[
-        Arg::with_name("http-cookie").required(true), // 2
-        Arg::with_name("request-method").required(true),
-        Arg::with_name("query-string").required(true),
-        Arg::with_name("http-referer").required(true), // 5
-        Arg::with_name("path-info").required(true),
-        Arg::with_name("http-host").required(true),
-        Arg::with_name("https").required(true),
-        Arg::with_name("repo").required(true),
-        Arg::with_name("page").required(true), // 10
-        Arg::with_name("current-url").required(true),
-        Arg::with_name("login-url").required(true),
+        Arg::new("http-cookie"), // 2
+        Arg::new("request-method"),
+        Arg::new("query-string"),
+        Arg::new("http-referer"), // 5
+        Arg::new("path-info"),
+        Arg::new("http-host"),
+        Arg::new("https"),
+        Arg::new("repo"),
+        Arg::new("page"), // 10
+        Arg::new("current-url"),
+        Arg::new("login-url"),
     ];
 
-    let app = App::new("Simple Authentication Filter for cgit")
+    let app = Command::new("Simple Authentication Filter for cgit")
         .version(env!("CARGO_PKG_VERSION"))
         .subcommand(
-            SubCommand::with_name("authenticate-cookie")
+            Command::new("authenticate-cookie")
                 .about("Processing authenticated cookie")
                 .args(sub_args)
-                .setting(AppSettings::Hidden),
+                .hide(true),
         )
         .subcommand(
-            SubCommand::with_name("authenticate-post")
+            Command::new("authenticate-post")
                 .about("Processing posted username and password")
                 .args(sub_args)
-                .setting(AppSettings::Hidden),
+                .hide(true),
         )
         .subcommand(
-            SubCommand::with_name("body")
+            Command::new("body")
                 .about("Return the login form")
                 .args(sub_args)
-                .setting(AppSettings::Hidden),
+                .hide(true),
         )
         .subcommand(
-            SubCommand::with_name("database")
+            Command::new("database")
                 .about("Database rated commands")
                 .subcommand(
-                    SubCommand::with_name("init")
+                    Command::new("init")
                         .about("Init sqlite database")
                         .display_order(0),
                 )
                 .subcommand(
-                    SubCommand::with_name("reset")
+                    Command::new("reset")
                         .about("Reset database")
-                        .arg(Arg::with_name("confirm").long("confirm"))
+                        .arg(Arg::new("confirm").long("confirm"))
                         .display_order(0),
                 )
                 .subcommand(
-                    SubCommand::with_name("upgrade")
+                    Command::new("upgrade")
                         .about("Upgrade database from v2(v0.3.x) to v3(^v0.4.x)")
                         .display_order(0),
                 )
                 .display_order(0),
         )
         .subcommand(
-            SubCommand::with_name("user")
+            Command::new("user")
                 .about("Users rated commands")
                 .subcommand(
-                    SubCommand::with_name("add")
+                    Command::new("add")
                         .about("Add user to database")
-                        .arg(Arg::with_name("user").required(true))
-                        .arg(Arg::with_name("password").required(true))
+                        .arg(Arg::new("user").required(true))
+                        .arg(Arg::new("password").required(true))
                         .display_order(0),
                 )
                 .subcommand(
-                    SubCommand::with_name("del")
+                    Command::new("del")
                         .about("Delete user from database")
-                        .arg(Arg::with_name("user").required(true))
+                        .arg(Arg::new("user").required(true))
                         .display_order(0),
                 )
                 .subcommand(
-                    SubCommand::with_name("list")
+                    Command::new("list")
                         .about("List all users")
                         .display_order(0),
                 )
                 .display_order(0),
         )
         .subcommand(
-            SubCommand::with_name("repo")
+            Command::new("repo")
                 .about("Repository ACL rated commands")
                 .subcommand(
-                    SubCommand::with_name("add")
+                    Command::new("add")
                         .about("Add user to repository")
-                        .arg(Arg::with_name("repo").required(true))
-                        .arg(Arg::with_name("user").required(true))
+                        .arg(Arg::new("repo").required(true))
+                        .arg(Arg::new("user").required(true))
                         .display_order(0),
                 )
                 .subcommand(
-                    SubCommand::with_name("del")
+                    Command::new("del")
                         .about("Del user from repository")
-                        .arg(Arg::with_name("repo").required(true))
-                        .arg(Arg::with_name("user").takes_value(true))
-                        .arg(
-                            Arg::with_name("clear-all")
-                                .long("clear-all")
-                                .conflicts_with("user"),
-                        )
+                        .arg(Arg::new("repo"))
+                        .arg(Arg::new("user"))
+                        .arg(Arg::new("clear-all").conflicts_with("user"))
                         .display_order(0),
                 )
                 .subcommand(
-                    SubCommand::with_name("list")
+                    Command::new("list")
                         .about("Show all repositories or only show specify repository detail")
-                        .arg(Arg::with_name("repo").takes_value(true))
+                        .arg(Arg::new("repo"))
                         .display_order(0),
                 )
                 .display_order(0),
@@ -789,7 +822,8 @@ fn process_arguments() -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    let logfile_path = env::var("LOG_FILE").unwrap_or_else(|_| "/var/cache/cgit/auth.log".to_string());
+    let logfile_path =
+        env::var("LOG_FILE").unwrap_or_else(|_| "/var/cache/cgit/auth.log".to_string());
     let logfile = FileAppender::builder()
         .encoder(Box::new(PatternEncoder::new(
             "{d(%Y-%m-%d %H:%M:%S)}- {h({l})} - {m}{n}",
@@ -798,7 +832,10 @@ fn main() -> Result<()> {
     let logfile = match logfile {
         Ok(f) => f,
         Err(e) => {
-            return Err(anyhow::Error::msg(format!("Got error while append to {}: {:?}", &logfile_path, e)))
+            return Err(anyhow::Error::msg(format!(
+                "Got error while append to {}: {:?}",
+                &logfile_path, e
+            )))
         }
     };
 
