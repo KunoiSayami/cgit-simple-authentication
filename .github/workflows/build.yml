@@ -19,7 +19,7 @@ jobs:
     name: Build
     runs-on: ${{ matrix.job.os }}
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
@@ -40,7 +40,7 @@ jobs:
             BIN='cgit-simple-authentication_darwin_amd64'
             mv target/release/cgit-simple-authentication target/release/$BIN
           fi
-          echo "::set-output name=bin::target/release/$BIN"
+          echo "output_binary_name=target/release/$BIN" >> $GITHUB_ENV
       - uses: actions/upload-artifact@v2
         with:
           name: artifact
@@ -50,6 +50,6 @@ jobs:
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: ${{ steps.rename.outputs.bin }}
+          files: ${{ env.output_binary_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

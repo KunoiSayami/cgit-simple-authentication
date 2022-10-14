@@ -33,7 +33,6 @@ use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection, SqliteConnection};
 use std::env;
 use std::io::{BufRead, Write};
-use std::result::Result::Ok;
 use std::str::FromStr;
 use tempdir::TempDir;
 use tokio_stream::StreamExt as _;
