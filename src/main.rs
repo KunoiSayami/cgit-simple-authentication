@@ -20,7 +20,9 @@ mod datastructures;
 #[cfg(test)]
 mod test;
 
-use crate::datastructures::{AuthorizerType, Config, Cookie, FormData, TestSuite, WrapConfigure};
+#[cfg(feature = "pam")]
+use crate::datastructures::AuthorizerType;
+use crate::datastructures::{Config, Cookie, FormData, TestSuite, WrapConfigure};
 use anyhow::Result;
 use clap::{Arg, ArgMatches, Command};
 use handlebars::Handlebars;
@@ -231,6 +233,13 @@ async fn cmd_init(cfg: Config) -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(feature = "pam"))]
+async fn verify_login(cfg: &WrapConfigure, data: &FormData) -> Result<bool> {
+    cfg.hook().await?;
+    data.authorize(cfg.get_authorizer()).await
+}
+
+#[cfg(feature = "pam")]
 async fn verify_login(cfg: &WrapConfigure, data: &FormData) -> Result<bool> {
     if let AuthorizerType::Password = cfg.get_authorizer().method() {
         cfg.hook().await?;

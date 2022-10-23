@@ -25,6 +25,7 @@ mod core {
         Argon2,
     };
     use redis::AsyncCommands;
+    #[cfg(feature = "pam")]
     use std::borrow::BorrowMut;
     use std::io::{Read, Write};
     use std::path::Path;
@@ -365,6 +366,7 @@ mod core {
             .unwrap();
     }
 
+    #[cfg(feature = "pam")]
     #[ignore]
     #[test]
     fn test_pam() {

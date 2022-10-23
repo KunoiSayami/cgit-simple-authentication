@@ -20,11 +20,15 @@ use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
+#[cfg(feature = "pam")]
+pub use ds_pam::*;
 use log::error;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sqlx::ConnectOptions;
-use std::borrow::{BorrowMut, Cow};
+#[cfg(feature = "pam")]
+use std::borrow::BorrowMut;
+use std::borrow::Cow;
 use std::fmt::{Debug, Formatter};
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
@@ -72,37 +76,54 @@ pub(crate) trait TestSuite {
     fn generate_test_config() -> Self;
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct PAMConfig {
-    use_pam: bool,
-    provider: String,
-}
+#[cfg(feature = "pam")]
+pub mod ds_pam {
 
-impl From<&str> for PAMConfig {
-    fn from(s: &str) -> Self {
-        let use_pam = !s.to_lowercase().eq("false");
-        Self {
-            use_pam,
-            provider: s.to_string(),
+    #[derive(Debug, Clone)]
+    pub struct PAMConfig {
+        use_pam: bool,
+        provider: String,
+    }
+
+    impl From<&str> for PAMConfig {
+        fn from(s: &str) -> Self {
+            let use_pam = !s.to_lowercase().eq("false");
+            Self {
+                use_pam,
+                provider: s.to_string(),
+            }
         }
     }
-}
 
-impl PAMConfig {
-    fn get_enabled(&self) -> bool {
-        self.use_pam
+    impl PAMConfig {
+        pub fn get_enabled(&self) -> bool {
+            self.use_pam
+        }
+
+        pub fn get_provider(&self) -> &String {
+            &self.provider
+        }
     }
 
-    fn get_provider(&self) -> &String {
-        &self.provider
+    impl Default for PAMConfig {
+        fn default() -> Self {
+            Self {
+                use_pam: false,
+                provider: "system-auth".to_string(),
+            }
+        }
     }
-}
 
-impl Default for PAMConfig {
-    fn default() -> Self {
-        Self {
-            use_pam: false,
-            provider: "system-auth".to_string(),
+    #[derive(Debug, Clone)]
+    pub struct PAMAuthorizer {
+        provider: String,
+    }
+
+    impl From<&PAMConfig> for PAMAuthorizer {
+        fn from(cfg: &PAMConfig) -> Self {
+            Self {
+                provider: cfg.get_provider().clone(),
+            }
         }
     }
 }
@@ -112,6 +133,7 @@ pub struct Config {
     pub cookie_ttl: u64,
     database: String,
     pub bypass_root: bool,
+    #[cfg(feature = "pam")]
     pam_config: PAMConfig,
     pub(crate) test: bool,
     protect_config: ProtectSettings,
@@ -123,6 +145,7 @@ impl Default for Config {
             cookie_ttl: DEFAULT_COOKIE_TTL,
             database: DEFAULT_DATABASE_LOCATION.to_string(),
             bypass_root: false,
+            #[cfg(feature = "pam")]
             pam_config: Default::default(),
             test: false,
             protect_config: Default::default(),
@@ -143,6 +166,7 @@ impl Config {
         let mut bypass_root: bool = false;
         let mut protect_enabled: bool = true;
         let mut protect_white_list_mode: bool = true;
+        #[cfg(feature = "pam")]
         let mut use_pam: &str = "false";
         //let mut skip_user_access_check: bool = false;
 
@@ -163,6 +187,7 @@ impl Config {
                 "cookie-ttl" => cookie_ttl = value.parse().unwrap_or(DEFAULT_COOKIE_TTL),
                 "database" => database = value,
                 "bypass-root" => bypass_root = value.to_lowercase().eq("true"),
+                #[cfg(feature = "pam")]
                 "use-pam" => use_pam = value,
                 "protect" => match value.to_lowercase().as_str() {
                     "full" => {
@@ -186,6 +211,8 @@ impl Config {
             cookie_ttl,
             database: database.to_string(),
             bypass_root,
+
+            #[cfg(feature = "pam")]
             pam_config: PAMConfig::from(use_pam),
             test: false,
             protect_config: ProtectSettings::from_path(
@@ -205,11 +232,7 @@ impl Config {
             return PathBuf::from(self.database.as_str());
         }
 
-        std::path::Path::new(CACHE_DIR).join(
-            std::path::Path::new(self.get_database_location())
-                .file_name()
-                .unwrap(),
-        )
+        Path::new(CACHE_DIR).join(Path::new(self.get_database_location()).file_name().unwrap())
     }
 
     async fn read_timestamp_from_file<P: AsRef<Path>>(path: P) -> Result<u64> {
@@ -276,6 +299,7 @@ impl Config {
         self.protect_config.query_is_all_protected()
     }
 
+    #[cfg(feature = "pam")]
     fn get_pam_config(&self) -> &PAMConfig {
         &self.pam_config
     }
@@ -291,6 +315,7 @@ impl TestSuite for Config {
             database: "test/tmp.db".to_string(),
             bypass_root: false,
             cookie_ttl: DEFAULT_COOKIE_TTL,
+            #[cfg(feature = "pam")]
             pam_config: Default::default(),
             test: true,
             protect_config: ProtectSettings::generate_test_config(),
@@ -618,6 +643,7 @@ impl std::fmt::Display for Cookie {
 
 #[derive(Debug, Clone)]
 pub enum AuthorizerType {
+    #[cfg(feature = "pam")]
     PAM,
     Password,
 }
@@ -628,6 +654,7 @@ impl std::fmt::Display for AuthorizerType {
             f,
             "{}",
             match self {
+                #[cfg(feature = "pam")]
                 AuthorizerType::PAM => "PAM",
                 AuthorizerType::Password => "PASSWORD",
             }
@@ -663,6 +690,15 @@ pub struct WrapConfigure {
 }
 
 impl From<Config> for WrapConfigure {
+    #[cfg(not(feature = "pam"))]
+    fn from(cfg: Config) -> Self {
+        let authorizer = Box::new(SQLAuthorizer::from(&cfg));
+        return Self {
+            config: cfg,
+            authorizer: authorizer,
+        };
+    }
+    #[cfg(feature = "pam")]
     fn from(cfg: Config) -> Self {
         let authorizer: Box<dyn Authorizer> = if cfg.get_pam_config().get_enabled() {
             Box::new(PAMAuthorizer::from(cfg.get_pam_config()))
@@ -676,19 +712,7 @@ impl From<Config> for WrapConfigure {
     }
 }
 
-#[derive(Debug, Clone)]
-struct PAMAuthorizer {
-    provider: String,
-}
-
-impl From<&PAMConfig> for PAMAuthorizer {
-    fn from(cfg: &PAMConfig) -> Self {
-        Self {
-            provider: cfg.get_provider().clone(),
-        }
-    }
-}
-
+#[cfg(feature = "pam")]
 #[async_trait::async_trait]
 impl Authorizer for PAMAuthorizer {
     fn method(&self) -> AuthorizerType {
