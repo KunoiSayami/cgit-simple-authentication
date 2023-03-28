@@ -17,9 +17,11 @@
 
 #[cfg(test)]
 mod core {
-    use crate::datastructures::{rand_str, Config, TestSuite};
-    use crate::{cmd_add_user, cmd_authenticate_cookie, cmd_init, cmd_repo_user_control};
-    use crate::{get_arg_matches, IOModule};
+    use crate::{
+        cmd_add_user, cmd_authenticate_cookie, cmd_init, cmd_repo_user_control,
+        datastructures::{rand_str, Config, TestSuite},
+        get_arg_matches, IOModule,
+    };
     use argon2::{
         password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
         Argon2,
@@ -41,7 +43,7 @@ mod core {
 
         let argon2 = Argon2::default();
 
-        argon2.hash_password(passwd, salt.as_ref()).unwrap();
+        argon2.hash_password(passwd, &salt).unwrap();
     }
 
     #[test]
@@ -141,7 +143,7 @@ mod core {
         std::fs::File::create("test/DATABASE_INITED").unwrap();
     }
 
-    fn lock(path: &std::path::PathBuf, sleep_length: usize) {
+    fn lock(path: &PathBuf, sleep_length: usize) {
         for _ in 0..(sleep_length * 100) {
             sleep(Duration::from_millis(10));
             if path.exists() {
@@ -157,7 +159,7 @@ mod core {
     #[test]
     fn test_02_insert_user() {
         lock(&PathBuf::from("test/DATABASE_INITED"), 3);
-        let matches = crate::get_arg_matches(Some(vec!["a", "user", "add", "hunter2", "hunter2"]));
+        let matches = get_arg_matches(Some(vec!["a", "user", "add", "hunter2", "hunter2"]));
         match matches.subcommand() {
             Some(("user", matches)) => match matches.subcommand() {
                 Some(("add", matches)) => {
@@ -184,7 +186,7 @@ mod core {
             vec!["a", "repo", "add", "repo", "hunter"],
         ];
         for x in args {
-            let matches = crate::get_arg_matches(Some(x));
+            let matches = get_arg_matches(Some(x));
             match matches.subcommand() {
                 Some(("repo", matches)) => match matches.subcommand() {
                     Some(("add", matches)) => {

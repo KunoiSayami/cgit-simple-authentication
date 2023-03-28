@@ -20,6 +20,7 @@ use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
+use base64::Engine;
 #[cfg(feature = "pam")]
 pub use ds_pam::*;
 use log::error;
@@ -117,6 +118,12 @@ pub mod ds_pam {
     #[derive(Debug, Clone)]
     pub struct PAMAuthorizer {
         provider: String,
+    }
+
+    impl PAMAuthorizer {
+        pub fn provider(&self) -> &str {
+            &self.provider
+        }
     }
 
     impl From<&PAMConfig> for PAMAuthorizer {
@@ -501,10 +508,7 @@ impl FormData {
 
         let argon2_alg = Argon2::default();
 
-        Ok(argon2_alg
-            .hash_password(passwd, salt.as_ref())
-            .unwrap()
-            .to_string())
+        Ok(argon2_alg.hash_password(passwd, &salt).unwrap().to_string())
     }
 
     pub fn set_password(&mut self, password: String) {
@@ -512,7 +516,7 @@ impl FormData {
         self.hash = Default::default();
     }
 
-    pub async fn authorize(&self, authorizer: &Box<dyn Authorizer>) -> anyhow::Result<bool> {
+    pub async fn authorize(&self, authorizer: &Box<dyn Authorizer>) -> Result<bool> {
         authorizer.verify(&self.user, &self.password).await
     }
 
@@ -585,7 +589,9 @@ impl Cookie {
         for cookie in cookies.split(';').map(|x| x.trim()) {
             let (key, value) = cookie.split_once('=').unwrap();
             if key.eq("cgit_auth") {
-                let value = base64::decode(value).unwrap_or_default();
+                let value = base64::engine::general_purpose::STANDARD
+                    .decode(value)
+                    .unwrap_or_default();
                 let value = std::str::from_utf8(&value).unwrap_or("");
 
                 if !value.contains(';') {
@@ -637,7 +643,7 @@ impl std::fmt::Display for Cookie {
             "{}_{}; {}; {}",
             self.timestamp, self.randint, self.user, self.reversed
         );
-        write!(f, "{}", base64::encode(s))
+        write!(f, "{}", base64::engine::general_purpose::STANDARD.encode(s))
     }
 }
 
@@ -667,7 +673,7 @@ pub trait Authorizer {
     fn method(&self) -> AuthorizerType {
         AuthorizerType::Password
     }
-    async fn verify(&self, name: &str, password: &str) -> anyhow::Result<bool>;
+    async fn verify(&self, name: &str, password: &str) -> Result<bool>;
 }
 
 #[async_trait::async_trait]
@@ -679,7 +685,7 @@ where
         (**self).method()
     }
 
-    async fn verify(&self, user: &str, password: &str) -> anyhow::Result<bool> {
+    async fn verify(&self, user: &str, password: &str) -> Result<bool> {
         (**self).verify(user, password).await
     }
 }
@@ -719,8 +725,8 @@ impl Authorizer for PAMAuthorizer {
         AuthorizerType::PAM
     }
 
-    async fn verify(&self, user: &str, password: &str) -> anyhow::Result<bool> {
-        let service = self.provider.as_str();
+    async fn verify(&self, user: &str, password: &str) -> Result<bool> {
+        let service = self.provider();
 
         let mut auth = pam::Authenticator::with_password(service).unwrap();
         auth.get_handler()
@@ -748,7 +754,7 @@ impl From<&Config> for SQLAuthorizer {
 }
 
 impl WrapConfigure {
-    pub(crate) async fn hook(&self) -> anyhow::Result<()> {
+    pub(crate) async fn hook(&self) -> Result<()> {
         let cfg = &self.config;
         if !cfg.get_test_status() {
             let last_copied = cfg.get_last_copy_timestamp().await.unwrap_or(0);
@@ -775,7 +781,7 @@ impl WrapConfigure {
 
 #[async_trait::async_trait]
 impl Authorizer for SQLAuthorizer {
-    async fn verify(&self, user: &str, password: &str) -> anyhow::Result<bool> {
+    async fn verify(&self, user: &str, password: &str) -> Result<bool> {
         let mut conn =
             sqlx::sqlite::SqliteConnectOptions::from_str(self.database_location.as_str())?
                 .journal_mode(sqlx::sqlite::SqliteJournalMode::Off)
