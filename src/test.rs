@@ -56,7 +56,7 @@ mod core {
 
     async fn async_test_redis() -> anyhow::Result<()> {
         let redis_conn = redis::Client::open("redis://127.0.0.1/")?;
-        let mut conn = redis_conn.get_async_connection().await?;
+        let mut conn = redis_conn.get_multiplexed_async_connection().await?;
 
         let s = rand_str(crate::datastructures::COOKIE_LENGTH);
         conn.set_ex::<_, _, String>("auth_test", &s, 60).await?;
@@ -348,7 +348,7 @@ mod core {
 
     async fn clear_redis_setting() -> anyhow::Result<()> {
         let client = redis::Client::open("redis://127.0.0.1")?;
-        let mut conn = client.get_async_connection().await?;
+        let mut conn = client.get_multiplexed_async_connection().await?;
 
         for key in &["cgit_repo_test", "cgit_repo_repo"] {
             conn.del::<_, i32>(*key).await?;
@@ -376,8 +376,8 @@ mod core {
         let user = option_env!("pam_user").unwrap_or("user");
         let password = option_env!("pam_password").unwrap_or("password");
 
-        let mut auth = pam::Authenticator::with_password(service).unwrap();
-        auth.get_handler()
+        let mut auth = pam::Client::with_password(service).unwrap();
+        auth.conversation_mut()
             .borrow_mut()
             .set_credentials(user, password);
         assert!(auth.authenticate().is_ok() && auth.open_session().is_ok())

@@ -728,8 +728,8 @@ impl Authorizer for PAMAuthorizer {
     async fn verify(&self, user: &str, password: &str) -> Result<bool> {
         let service = self.provider();
 
-        let mut auth = pam::Authenticator::with_password(service).unwrap();
-        auth.get_handler()
+        let mut auth = pam::Client::with_password(service).unwrap();
+        auth.conversation_mut()
             .borrow_mut()
             .set_credentials(user, password);
         Ok(auth.authenticate().is_ok() && auth.open_session().is_ok())

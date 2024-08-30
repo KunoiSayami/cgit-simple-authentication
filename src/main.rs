@@ -71,12 +71,12 @@ impl<R: BufRead, W: Write> IOModule<R, W> {
         if ret.unwrap_or(false) {
             let redis_conn = redis::Client::open("redis://127.0.0.1/")?;
             let cookie = Cookie::generate(data.get_user());
-            let mut conn = redis_conn.get_async_connection().await?;
+            let mut conn = redis_conn.get_multiplexed_async_connection().await?;
 
             conn.set_ex::<_, _, String>(
                 format!("cgit_auth_{}", cookie.get_key()),
                 cookie.get_body(),
-                cfg.get_config().cookie_ttl as usize,
+                cfg.get_config().cookie_ttl as u64,
             )
             .await?;
 
@@ -143,7 +143,7 @@ async fn cmd_authenticate_cookie(matches: &ArgMatches, cfg: Config) -> Result<bo
     }
 
     let redis_conn = redis::Client::open("redis://127.0.0.1/")?;
-    let mut conn = redis_conn.get_async_connection().await?;
+    let mut conn = redis_conn.get_multiplexed_async_connection().await?;
 
     let redis_key = format!("cgit_repo_{}", repo);
     if !repo.is_empty() && !conn.exists(&redis_key).await? {
@@ -180,7 +180,7 @@ async fn cmd_authenticate_cookie(matches: &ArgMatches, cfg: Config) -> Result<bo
         {
             conn.expire::<_, bool>(
                 format!("cgit_auth_{}", cookie.get_key()),
-                cfg.cookie_ttl as usize,
+                cfg.cookie_ttl as i64,
             )
             .await?;
             if cookie.eq_body(r.as_str()) {
@@ -477,7 +477,7 @@ async fn cmd_repo_user_control(matches: &ArgMatches, cfg: Config, is_delete: boo
     let user = matches
         .get_one::<String>("user")
         .map(|s| s.as_str())
-        .unwrap_or("");
+        .unwrap_or_default();
 
     let clear_all = is_delete && matches.contains_id("clear-all");
 
@@ -489,7 +489,7 @@ async fn cmd_repo_user_control(matches: &ArgMatches, cfg: Config, is_delete: boo
     }
 
     let redis_client = redis::Client::open("redis://127.0.0.1/")?;
-    let mut redis_conn = redis_client.get_async_connection().await?;
+    let mut redis_conn = redis_client.get_multiplexed_async_connection().await?;
 
     let mut conn = SqliteConnection::connect(cfg.get_database_location()).await?;
 
@@ -555,11 +555,9 @@ async fn cmd_repo_user_control(matches: &ArgMatches, cfg: Config, is_delete: boo
 
     if !clear_all {
         println!(
-            "{} user {} {} repository {} ACL successful",
+            "{} user {user} {} repository {repo} ACL successful",
             if is_delete { "Delete" } else { "Add" },
-            user,
             if is_delete { "from" } else { "to" },
-            repo,
         );
     } else {
         println!("Clear all users from repository {} ACL", repo);
