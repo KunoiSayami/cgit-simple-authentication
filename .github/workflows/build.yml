@@ -37,7 +37,7 @@ jobs:
             BIN='cgit-simple-authentication_linux_amd64'
             mv target/release/cgit-simple-authentication target/release/$BIN
           elif [ "$RUNNER_OS" == "macOS" ]; then
-            BIN='cgit-simple-authentication_darwin_amd64'
+            BIN='cgit-simple-authentication_darwin_arm64'
             mv target/release/cgit-simple-authentication target/release/$BIN
           fi
           echo "output_binary_name=target/release/$BIN" >> $GITHUB_ENV

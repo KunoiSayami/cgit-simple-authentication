@@ -168,7 +168,7 @@ async fn cmd_authenticate_cookie(matches: &ArgMatches, cfg: Config) -> Result<bo
                 .await?
         {
             let users = users.split_whitespace().collect::<Vec<&str>>();
-            conn.sadd(&redis_key, users).await?;
+            let _: () = conn.sadd(&redis_key, users).await?;
         }
     }
 
@@ -841,7 +841,7 @@ fn main() -> Result<()> {
             return Err(anyhow::Error::msg(format!(
                 "Got error while append to {}: {:?}",
                 &logfile_path, e
-            )))
+            )));
         }
     };
 

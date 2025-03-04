@@ -18,13 +18,13 @@
 #[cfg(test)]
 mod core {
     use crate::{
-        cmd_add_user, cmd_authenticate_cookie, cmd_init, cmd_repo_user_control,
-        datastructures::{rand_str, Config, TestSuite},
-        get_arg_matches, IOModule,
+        IOModule, cmd_add_user, cmd_authenticate_cookie, cmd_init, cmd_repo_user_control,
+        datastructures::{Config, TestSuite, rand_str},
+        get_arg_matches,
     };
     use argon2::{
-        password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
         Argon2,
+        password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     };
     use redis::AsyncCommands;
     #[cfg(feature = "pam")]
@@ -37,7 +37,7 @@ mod core {
 
     #[test]
     fn test_argon2() {
-        use rand_core::OsRng;
+        use argon2::password_hash::rand_core::OsRng;
         let passwd = b"hunter2";
         let salt = SaltString::generate(&mut OsRng);
 
@@ -65,7 +65,7 @@ mod core {
 
         assert_eq!(conn.get::<_, String>("auth_test").await?, s);
 
-        conn.del("auth_test").await?;
+        let _: () = conn.del("auth_test").await?;
 
         assert_eq!(conn.exists::<_, bool>("auth_test").await?, false);
         Ok(())
