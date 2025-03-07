@@ -312,7 +312,7 @@ mod core {
 
     #[test]
     fn test_protected_repo_parser() {
-        let tmpdir = tempdir::TempDir::new("test").unwrap();
+        let tmpdir = tempfile::TempDir::new().unwrap();
 
         let another_file_path = format!(
             "include={}/REPO_SETTING # TEST\ncgit-simple-auth-protect=part",

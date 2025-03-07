@@ -268,6 +268,7 @@ impl Config {
     async fn write_current_timestamp_to_file<P: AsRef<Path>>(path: P) -> Result<()> {
         let mut file = tokio::fs::OpenOptions::new()
             .create(true)
+            .truncate(true)
             .write(true)
             .open(path)
             .await?;
@@ -390,7 +391,7 @@ impl ProtectSettings {
         let context = match context {
             Ok(context) => context,
             Err(e) => {
-                error!("Got error while reading {:?}, {:?}", path, e);
+                error!("Got error while reading {path:?}, {e:?}");
                 if let std::io::ErrorKind::NotFound = e.kind() {
                     error!("File not found, did you forget to perform initialization?");
                 }
@@ -449,7 +450,7 @@ impl ProtectSettings {
                 if (white_list_mode && value.eq("false")) || (!white_list_mode && value.eq("true"))
                 {
                     if last_insert_repo.eq(last_repo) {
-                        log::warn!("Found duplicate options in repo {}", last_repo);
+                        log::warn!("Found duplicate options in repo {last_repo}");
                         continue;
                     }
                     repos.push(last_repo.to_string());
@@ -516,6 +517,7 @@ impl FormData {
         self.hash = Default::default();
     }
 
+    #[allow(clippy::borrowed_box)]
     pub async fn authorize(&self, authorizer: &Box<dyn Authorizer>) -> Result<bool> {
         authorizer.verify(&self.user, &self.password).await
     }
@@ -699,10 +701,10 @@ impl From<Config> for WrapConfigure {
     #[cfg(not(feature = "pam"))]
     fn from(cfg: Config) -> Self {
         let authorizer = Box::new(SQLAuthorizer::from(&cfg));
-        return Self {
+        Self {
             config: cfg,
-            authorizer: authorizer,
-        };
+            authorizer,
+        }
     }
     #[cfg(feature = "pam")]
     fn from(cfg: Config) -> Self {
@@ -770,6 +772,7 @@ impl WrapConfigure {
         Ok(())
     }
 
+    #[allow(clippy::borrowed_box)]
     pub(crate) fn get_authorizer(&self) -> &Box<dyn Authorizer> {
         &self.authorizer
     }
@@ -795,7 +798,7 @@ impl Authorizer for SQLAuthorizer {
                 .fetch_one(&mut conn)
                 .await?;
 
-        let parsed_hash = PasswordHash::new(passwd_hash.as_str()).unwrap();
+        let parsed_hash = PasswordHash::new(&passwd_hash).unwrap();
         let argon2_alg = Argon2::default();
 
         Ok(argon2_alg

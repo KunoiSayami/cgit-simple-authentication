@@ -26,6 +26,7 @@ use crate::datastructures::{Config, Cookie, FormData, TestSuite, WrapConfigure};
 use anyhow::Result;
 use clap::{Arg, ArgMatches, Command};
 use handlebars::Handlebars;
+use itertools::Itertools as _;
 use log4rs::append::file::FileAppender;
 use log4rs::config::{Appender, Root};
 use log4rs::encode::pattern::PatternEncoder;
@@ -36,7 +37,7 @@ use sqlx::{ConnectOptions, Connection, SqliteConnection};
 use std::env;
 use std::io::{BufRead, Write};
 use std::str::FromStr;
-use tempdir::TempDir;
+use tempfile::TempDir;
 use tokio_stream::StreamExt as _;
 
 struct IOModule<R, W> {
@@ -59,13 +60,13 @@ impl<R: BufRead, W: Write> IOModule<R, W> {
         let ret = verify_login(&cfg, &data).await;
 
         if let Err(ref e) = ret {
-            eprintln!("{:?}", e);
+            eprintln!("{e:?}");
             #[cfg(test)]
             eprintln!(
                 "If database locked error occurs frequently, \
             please use environment DISK_WAIT_TIME to specify longer time."
             );
-            log::error!("{:?}", e)
+            log::error!("{e:?}")
         }
 
         if ret.unwrap_or(false) {
@@ -76,7 +77,7 @@ impl<R: BufRead, W: Write> IOModule<R, W> {
             conn.set_ex::<_, _, String>(
                 format!("cgit_auth_{}", cookie.get_key()),
                 cookie.get_body(),
-                cfg.get_config().cookie_ttl as u64,
+                cfg.get_config().cookie_ttl,
             )
             .await?;
 
@@ -85,7 +86,7 @@ impl<R: BufRead, W: Write> IOModule<R, W> {
             let is_secure = matches
                 .get_one::<String>("https")
                 .map(|s| s.as_str())
-                .map_or(false, |x| matches!(x, "yes" | "on" | "1"));
+                .is_some_and(|x| matches!(x, "yes" | "on" | "1"));
             let domain = matches
                 .get_one::<String>("http-host")
                 .map(|s| s.as_str())
@@ -100,11 +101,8 @@ impl<R: BufRead, W: Write> IOModule<R, W> {
             writeln!(&mut self.writer, "Location: {}", location)?;
             writeln!(
                 &mut self.writer,
-                "Set-Cookie: cgit_auth={}; Domain={}; Max-Age={}; HttpOnly{}",
-                cookie_value,
-                domain,
+                "Set-Cookie: cgit_auth={cookie_value}; Domain={domain}; Max-Age={}; HttpOnly{cookie_suffix}",
                 cfg.get_config().cookie_ttl * 10,
-                cookie_suffix
             )?;
         } else {
             writeln!(&mut self.writer, "Status: 403 Forbidden")?;
@@ -145,7 +143,7 @@ async fn cmd_authenticate_cookie(matches: &ArgMatches, cfg: Config) -> Result<bo
     let redis_conn = redis::Client::open("redis://127.0.0.1/")?;
     let mut conn = redis_conn.get_multiplexed_async_connection().await?;
 
-    let redis_key = format!("cgit_repo_{}", repo);
+    let redis_key = format!("cgit_repo_{repo}");
     if !repo.is_empty() && !conn.exists(&redis_key).await? {
         let sql_conn = SqliteConnectOptions::from_str(cfg.get_database_location())?
             .read_only(true)
@@ -155,8 +153,7 @@ async fn cmd_authenticate_cookie(matches: &ArgMatches, cfg: Config) -> Result<bo
             .await;
         if let Err(ref e) = sql_conn {
             log::error!(
-                "Got error while open sqlite connection: {:?}\nDatabase location: {}",
-                e,
+                "Got error while open sqlite connection: {e:?}\nDatabase location: {}",
                 cfg.get_database_location()
             );
         }
@@ -173,7 +170,7 @@ async fn cmd_authenticate_cookie(matches: &ArgMatches, cfg: Config) -> Result<bo
     }
 
     if let Ok(Some(cookie)) = Cookie::load_from_request(cookies) {
-        log::debug!("Cookie is {:?}", &cookie);
+        log::debug!("Cookie is {cookie:?}");
         if let Ok(r) = conn
             .get::<_, String>(format!("cgit_auth_{}", cookie.get_key()))
             .await
@@ -196,7 +193,7 @@ async fn cmd_authenticate_cookie(matches: &ArgMatches, cfg: Config) -> Result<bo
                 }
             }
         }
-        log::debug!("{:?}", cookie);
+        log::debug!("{cookie:?}");
     }
 
     Ok(false)
@@ -262,11 +259,11 @@ async fn cmd_body(matches: &ArgMatches, _cfg: Config) {
         action: matches
             .get_one::<String>("login-url")
             .map(|s| s.as_str())
-            .unwrap_or(""),
+            .unwrap_or_default(),
         redirect: matches
             .get_one::<String>("current-url")
             .map(|s| s.as_str())
-            .unwrap_or(""),
+            .unwrap_or_default(),
         version: env!("CARGO_PKG_VERSION"),
     };
     handlebars
@@ -279,11 +276,11 @@ async fn cmd_add_user(matches: &ArgMatches, cfg: Config) -> Result<()> {
     let user = matches
         .get_one::<String>("user")
         .map(|s| s.as_str())
-        .unwrap_or("");
+        .unwrap_or_default();
     let passwd = matches
         .get_one::<String>("password")
         .map(|s| s.to_string())
-        .unwrap_or_else(|| "".to_string());
+        .unwrap_or_default();
     if user.is_empty() || passwd.is_empty() {
         return Err(anyhow::Error::msg("Invalid user or password length"));
     }
@@ -318,7 +315,7 @@ async fn cmd_add_user(matches: &ArgMatches, cfg: Config) -> Result<()> {
         .execute(&mut conn)
         .await?;
 
-    println!("Insert {} ({}) to database", user, uid);
+    println!("Insert {user} ({uid}) to database");
 
     drop(conn);
 
@@ -338,12 +335,11 @@ async fn cmd_list_user(cfg: Config) -> Result<()> {
             sqlx::query_as::<_, (String,)>(r#"SELECT "user" FROM "accounts""#).fetch(&mut conn);
 
         println!(
-            "There is {} user{} in database",
-            count,
+            "There is {count} user{} in database",
             if count > 1 { "s" } else { "" }
         );
         while let Some(Ok((row,))) = iter.next().await {
-            println!("{}", row)
+            println!("{row}")
         }
     } else {
         println!("There is not user exists.")
@@ -369,7 +365,7 @@ async fn cmd_delete_user(matches: &ArgMatches, cfg: Config) -> Result<()> {
         .await?;
 
     if items.is_empty() {
-        return Err(anyhow::Error::msg(format!("User {} not found", user)));
+        return Err(anyhow::Error::msg(format!("User {user} not found")));
     }
 
     sqlx::query(r#"DELETE FROM "accounts" WHERE "user" = ?"#)
@@ -377,7 +373,7 @@ async fn cmd_delete_user(matches: &ArgMatches, cfg: Config) -> Result<()> {
         .execute(&mut conn)
         .await?;
 
-    println!("Delete {} from database", user);
+    println!("Delete {user} from database");
 
     cfg.write_database_commit_timestamp().await?;
     Ok(())
@@ -407,7 +403,7 @@ async fn cmd_reset_database(matches: &ArgMatches, cfg: Config) -> Result<()> {
 }
 
 async fn cmd_upgrade_database(cfg: Config) -> Result<()> {
-    let tmp_dir = TempDir::new("rolling")?;
+    let tmp_dir = TempDir::new()?;
 
     let v2_path = tmp_dir.path().join("v2.db");
     let v3_path = tmp_dir.path().join("v3.db");
@@ -448,7 +444,7 @@ async fn cmd_upgrade_database(cfg: Config) -> Result<()> {
                 .bind(uid.as_str())
                 .execute(&mut conn)
                 .await?;
-            log::debug!("Process user: {} ({})", user, uid);
+            log::debug!("Process user: {user} ({uid})");
         }
         drop(conn);
 
@@ -457,8 +453,7 @@ async fn cmd_upgrade_database(cfg: Config) -> Result<()> {
         println!("Upgrade database successful");
     } else {
         eprintln!(
-            "Got database version {} but {} required",
-            v,
+            "Got database version {v} but {} required",
             database::previous::VERSION
         )
     }
@@ -540,7 +535,7 @@ async fn cmd_repo_user_control(matches: &ArgMatches, cfg: Config, is_delete: boo
         .execute(&mut conn)
         .await?;
 
-    let redis_key = format!("cgit_repo_{}", repo);
+    let redis_key = format!("cgit_repo_{repo}");
     if redis_conn.exists::<_, i32>(&redis_key).await? == 0 {
         redis_conn.sadd::<_, _, i32>(&redis_key, users).await?;
     } else if is_delete {
@@ -560,7 +555,7 @@ async fn cmd_repo_user_control(matches: &ArgMatches, cfg: Config, is_delete: boo
             if is_delete { "from" } else { "to" },
         );
     } else {
-        println!("Clear all users from repository {} ACL", repo);
+        println!("Clear all users from repository {repo} ACL");
     }
 
     Ok(())
@@ -585,8 +580,7 @@ async fn cmd_list_repos_acl(arg_matches: &ArgMatches, cfg: Config) -> Result<()>
             .unwrap_or((0,));
 
         println!(
-            "There is total {} {} in database",
-            length,
+            "There is total {length} {} in database",
             if length == 1 {
                 "repository"
             } else {
@@ -597,15 +591,7 @@ async fn cmd_list_repos_acl(arg_matches: &ArgMatches, cfg: Config) -> Result<()>
         let mut iter =
             sqlx::query_as::<_, (String, String)>(r#"SELECT * FROM "repos""#).fetch(&mut conn);
         while let Some(Ok((repo, users))) = iter.next().await {
-            println!(
-                "{}: {}",
-                repo,
-                users
-                    .split_whitespace()
-                    .into_iter()
-                    .collect::<Vec<&str>>()
-                    .join(",")
-            )
+            println!("{repo}: {}", users.split_whitespace().join(","))
         }
     } else {
         let ret =
@@ -614,17 +600,9 @@ async fn cmd_list_repos_acl(arg_matches: &ArgMatches, cfg: Config) -> Result<()>
                 .fetch_optional(&mut conn)
                 .await?;
         if let Some((repo, users)) = ret {
-            println!(
-                "{}: {}",
-                repo,
-                users
-                    .split_whitespace()
-                    .into_iter()
-                    .collect::<Vec<&str>>()
-                    .join(",")
-            )
+            println!("{repo}: {}", users.split_whitespace().join(","))
         } else {
-            println!("Repository {} not register in database", repo)
+            println!("Repository {repo} not register in database")
         }
     }
 
@@ -805,13 +783,11 @@ fn get_arg_matches(arguments: Option<Vec<&str>>) -> ArgMatches {
                 .display_order(0),
         );
 
-    let matches = if let Some(args) = arguments {
+    if let Some(args) = arguments {
         app.get_matches_from(args)
     } else {
         app.get_matches()
-    };
-
-    matches
+    }
 }
 
 fn process_arguments() -> Result<()> {
@@ -839,8 +815,7 @@ fn main() -> Result<()> {
         Ok(f) => f,
         Err(e) => {
             return Err(anyhow::Error::msg(format!(
-                "Got error while append to {}: {:?}",
-                &logfile_path, e
+                "Got error while append to {logfile_path}: {e:?}",
             )));
         }
     };
@@ -865,13 +840,13 @@ fn main() -> Result<()> {
         "{}",
         env::args()
             .enumerate()
-            .map(|(nth, arg)| format!("[{}]={}", nth, arg))
+            .map(|(nth, arg)| format!("[{nth}]={arg}"))
             .collect::<Vec<String>>()
             .join(" ")
     );
 
     if let Err(e) = process_arguments() {
-        log::error!("{:?}", e);
+        log::error!("{e:?}");
     };
 
     Ok(())

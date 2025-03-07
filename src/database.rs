@@ -93,4 +93,3 @@ pub mod v3 {
 #[allow(deprecated)]
 pub use v2 as previous;
 pub use v3 as current;
-pub use v3::VERSION;

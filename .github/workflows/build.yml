@@ -1,55 +1,150 @@
-name: Build binary
+name: Build Releases
 
 on:
   push:
     tags:
       - v**
-  pull_request:
+
+  workflow_dispatch:
+    branches:
+      - master
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
   build:
     strategy:
-      fail-fast: true
       matrix:
         job:
-          - { os: macos-latest }
-          - { os: ubuntu-latest }
-
+          - os: macos-latest
+          - os: ubuntu-latest
 
     name: Build
     runs-on: ${{ matrix.job.os }}
+    env:
+      RUST_BACKTRACE: full
+
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-      - uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --release
-      - name: Rename binary
-        id: rename
+      - uses: actions/checkout@v4
+      - name: Determine Binary Name
+        id: determine-os
         shell: bash
         run: |
           if [ "$RUNNER_OS" == "Linux" ]; then
-            BIN='cgit-simple-authentication_linux_amd64'
-            mv target/release/cgit-simple-authentication target/release/$BIN
-          elif [ "$RUNNER_OS" == "macOS" ]; then
-            BIN='cgit-simple-authentication_darwin_arm64'
-            mv target/release/cgit-simple-authentication target/release/$BIN
+            BINARY=cgit-simple-authentication_linux_amd64
+            PROTOC_BINARY=/usr/bin/protoc
+          elif [ "$RUNNER_OS" == "Windows" ]; then
+            BINARY=cgit-simple-authentication_windows_amd64.exe
+            PROTOC_BINARY=./bin/protoc.exe
+          else # macOS
+            #if [ "$(uname --machine)" == "arm64" ]; then
+              BINARY=cgit-simple-authentication_darwin_arm64
+            #else
+              #BINARY=cgit-simple-authentication_darwin_amd64
+            #fi
+            #echo "arch=$(uname --machine)" >> $GITHUB_OUTPUT
+            PROTOC_BINARY=$PWD/bin/protoc
           fi
-          echo "output_binary_name=target/release/$BIN" >> $GITHUB_ENV
-      - uses: actions/upload-artifact@v2
+          echo "binary_name=$BINARY" >> $GITHUB_OUTPUT
+          echo "PROTOC=$PROTOC_BINARY" >> $GITHUB_ENV
+      - name: Prepare protobuf
+        id: protobuf_init
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            sudo apt-get install -qqy protobuf-compiler
+          else
+            if [ "$RUNNER_OS" == "Windows" ]; then
+              PROTOBUF_REMOTE=https://github.com/protocolbuffers/protobuf/releases/download/v25.6/protoc-25.6-win64.zip
+            else
+              PROTOBUF_REMOTE=https://github.com/protocolbuffers/protobuf/releases/download/v25.6/protoc-25.6-osx-universal_binary.zip
+            fi
+            curl -fL -o protoc.zip $PROTOBUF_REMOTE
+            unzip -qq protoc.zip
+          fi
+      #- name: Environment
+      #  run: |
+      #    git submodule update --init --recursive
+      - name: Cache Cargo packages
+        id: cache-cargo
+        uses: actions/cache@v4
         with:
-          name: artifact
+          key: ${{ runner.os }}-cargo
           path: |
-            target/release/cgit-simple-authentication_*
+            ~/.cargo
+            ~/.rustup
+            $PWD/target
+      - if: ${{ steps.cache-cargo.outputs.cache-hit != 'true' }}
+        name: Update rust
+        run: rustup update
+      - name: Build binary
+        run: |
+          cargo build --profile release
+      - name: Rename binary
+        id: rename
+        shell: bash
+        env:
+          BINARY_NAME: ${{ steps.determine-os.outputs.binary_name }}
+        run: |
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            mv target/release/cgit-simple-authentication.exe target/release/$BINARY_NAME
+          else
+            mv target/release/cgit-simple-authentication target/release/$BINARY_NAME
+          fi
+          echo "bin=target/release/$BINARY_NAME" >> $GITHUB_OUTPUT
+      - uses: actions/upload-artifact@v4.3.3
+        with:
+          name: ${{ steps.determine-os.outputs.binary_name }}
+          path: target/release/${{ steps.determine-os.outputs.binary_name }}
+
       - name: Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: ${{ env.output_binary_name }}
+          files: ${{ steps.rename.outputs.bin }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build_aarch64:
+    name: Cross build
+    runs-on: ubuntu-latest
+    env:
+      RUST_BACKTRACE: full
+
+    steps:
+      - uses: actions/checkout@v4
+      #- name: Environment
+      #  run: |
+      #    git submodule update --init --recursive
+      - name: Cache Cargo packages
+        id: cache-cargo
+        uses: actions/cache@v4
+        with:
+          key: ${{ runner.os }}-cargo-cross
+          path: |
+            ~/.cargo
+            ~/.rustup
+            ~/work/cgit-simple-authentication/cgit-simple-authentication/target
+      - if: ${{ steps.cache-cargo.outputs.cache-hit != 'true' }}
+        name: Update rust
+        run: rustup update && rustup target install aarch64-unknown-linux-musl
+      - name: Install cross
+        run: cargo install cross
+      - name: Build binary
+        env:
+          PROTOC: /usr/bin/protoc
+        run: |
+          cross build --target aarch64-unknown-linux-musl --profile release
+      - run: mv target/aarch64-unknown-linux-musl/release/cgit-simple-authentication target/aarch64-unknown-linux-musl/release/cgit-simple-authentication_linux_aarch64
+      - uses: actions/upload-artifact@v4.3.3
+        with:
+          name: cgit-simple-authentication_linux_aarch64
+          path: target/aarch64-unknown-linux-musl/release/cgit-simple-authentication_linux_aarch64
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: target/aarch64-unknown-linux-musl/release/cgit-simple-authentication_linux_aarch64
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
