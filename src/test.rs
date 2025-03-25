@@ -18,7 +18,9 @@
 #[cfg(test)]
 mod core {
     use crate::{
-        IOModule, cmd_add_user, cmd_authenticate_cookie, cmd_init, cmd_repo_user_control,
+        authentication::{
+            IOModule, cmd_add_user, cmd_authenticate_cookie, cmd_init, cmd_repo_user_control,
+        },
         datastructures::{Config, TestSuite, rand_str},
         get_arg_matches,
     };
@@ -99,10 +101,7 @@ mod core {
             "/?p=login",
         ]));
         let mut output = Vec::new();
-        let mut module = IOModule {
-            reader: &correct_input[..],
-            writer: &mut output,
-        };
+        let mut module = IOModule::new(&correct_input[..], &mut output);
 
         let cfg = Config::generate_test_config();
 
