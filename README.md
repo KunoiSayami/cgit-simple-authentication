@@ -1,87 +1,163 @@
-# Cgit simple authentication
+# Cgit Simple Authentication
 
-Simple authentication for [cgit](https://wiki.archlinux.org/title/Cgit) powered by [sqlite](https://wiki.archlinux.org/title/SQLite) and [redis](https://wiki.archlinux.org/title/Redis)
+Simple authentication filter for [cgit](https://wiki.archlinux.org/title/Cgit) powered by [SQLite](https://wiki.archlinux.org/title/SQLite) and [Redis](https://wiki.archlinux.org/title/Redis).
 
-## Configure
+## Features
 
-Add this project as cgit [`auth-filter`](https://man.archlinux.org/man/cgitrc.5#FILTER_API)
+- Cookie-based session authentication with configurable TTL
+- Password hashing with [Argon2](https://en.wikipedia.org/wiki/Argon2)
+- Per-repository access control lists (ACL)
+- Flexible protection modes: protect all repos, selected repos, or none
+- Optional [PAM](https://wiki.archlinux.org/title/PAM) authentication support
+- Session storage via Redis for fast cookie validation
+- Built-in login page served by the filter
+- Database migration support (v2 to v3)
+- Pre-built binaries for Linux (amd64/aarch64) and macOS (arm64)
 
-```conf
-auth-filter=/opt/cgit-simple-authentication/target/release/cgit-simple-authentication
+## Requirements
+
+- [Rust](https://www.rust-lang.org/) (for building from source)
+- [Redis](https://wiki.archlinux.org/title/Redis) (running on `127.0.0.1`)
+- [cgit](https://wiki.archlinux.org/title/Cgit) with `auth-filter` support
+
+## Building
+
+```shell
+cargo build --release
 ```
 
-Available options for this filter:
+The binary will be at `target/release/cgit-simple-authentication`.
 
-```conf
-# Set cookie time to live
-cgit-simple-auth-cookie-ttl=600
-# Specify database location (Default is /etc/cgit/auth.db) 
-cgit-simple-auth-database=/etc/cgit/auth.db
-# Should authenticate in repositories root view
-cgit-simple-auth-bypass-root=false
-# Should enable authenticate in all repository
-# Available options: full, part, none
-cgit-simple-auth-protect=full
-# Use PAM to provide verification
-# Available options: false(disable PAM)
-# Or 'system-auth', 'system-login' etc. (write the method you need)
-cgit-simple-auth-use-pam=false
+## Getting Started
+
+### 1. Initialize the database
+
+```shell
+cgit-simple-authentication database init
 ```
 
-Available options for repositories:
+This creates the SQLite database at the configured location (default: `/etc/cgit/auth.db`).
 
-_You should set `cgit-simple-auth-protect=part`_
+### 2. Add a user
+
+```shell
+cgit-simple-authentication user add admin hunter2
+```
+
+### 3. Configure cgit
+
+Add the filter to your `cgitrc`:
 
 ```conf
-repo.url=test
-# Enable protect for this repository
+auth-filter=/opt/cgit-simple-authentication/cgit-simple-authentication
+```
+
+## Configuration
+
+All options are set in the `cgitrc` file:
+
+| Option | Default | Description |
+|---|---|---|
+| `cgit-simple-auth-cookie-ttl` | `1200` | Cookie time to live in seconds |
+| `cgit-simple-auth-database` | `/etc/cgit/auth.db` | SQLite database file path |
+| `cgit-simple-auth-bypass-root` | `false` | Skip authentication on the repository list (root) page |
+| `cgit-simple-auth-protect` | `full` | Protection mode: `full`, `part`, or `none` |
+| `cgit-simple-auth-use-pam` | `false` | PAM service name, or `false` to disable |
+
+### Protection Modes
+
+- **`full`** (default) -- All repositories require authentication. Individual repos can opt out with `repo.protect=false`.
+- **`part`** -- No repositories are protected by default. Individual repos can opt in with `repo.protect=true`.
+- **`none`** -- Authentication is disabled entirely.
+
+### Per-Repository Configuration
+
+When using `part` mode, enable protection for specific repositories:
+
+```conf
+repo.url=my-private-repo
 repo.protect=true
 ```
 
-## Usage
+When using `full` mode, disable protection for specific repositories:
 
-You should initialize your database first
+```conf
+repo.url=my-public-repo
+repo.protect=false
+```
+
+### Repository ACL
+
+When a repository is protected, you can control which users have access:
 
 ```shell
-cargo run -- database init
+# Grant a user access to a repository
+cgit-simple-authentication repo add my-repo alice
+
+# Revoke a user's access
+cgit-simple-authentication repo del my-repo alice
+
+# Remove all users from a repository's ACL
+cgit-simple-authentication repo del my-repo --clear-all
+
+# List all repository ACLs
+cgit-simple-authentication repo list
+
+# Show ACL for a specific repository
+cgit-simple-authentication repo list my-repo
 ```
 
-Then add user with
+### PAM Authentication
+
+To authenticate against system users via PAM instead of the built-in SQLite database, enable the `pam` feature at compile time and set the PAM service name:
 
 ```shell
-cargo run -- user add admin hunter2
+cargo build --release --features pam
 ```
 
-More usage information, see `--help`.
-
-## Program help
-
-```plain
-Simple Authentication Filter for cgit
-
-USAGE:
-    cgit-simple-authentication.exe [SUBCOMMAND]
-
-FLAGS:
-    -h, --help       Prints help information
-    -V, --version    Prints version information
-
-SUBCOMMANDS:
-    database    Database rated commands
-    repo        Repository ACL rated commands
-    user        Users rated commands
-    help        Prints this message or the help of the given subcommand(s)
+```conf
+cgit-simple-auth-use-pam=system-auth
 ```
 
-## Source
+### Logging
 
-Most of the ideas come from: https://github.com/varphone/cgit-gogs-auth-filter
+Logs are written to `/var/cache/cgit/auth.log` by default. Override with the `LOG_FILE` environment variable.
+
+## User Management
+
+```shell
+# Add a user
+cgit-simple-authentication user add <username> <password>
+
+# Delete a user
+cgit-simple-authentication user del <username>
+
+# List all users
+cgit-simple-authentication user list
+```
+
+## Database Management
+
+```shell
+# Initialize the database
+cgit-simple-authentication database init
+
+# Upgrade from v2 (0.3.x) to v3 (0.4.x+)
+cgit-simple-authentication database upgrade
+
+# Reset the database (requires --confirm)
+cgit-simple-authentication database reset --confirm
+```
+
+## Acknowledgments
+
+Inspired by: https://github.com/varphone/cgit-gogs-auth-filter
 
 ## License
 
 [![](https://www.gnu.org/graphics/agplv3-155x51.png)](https://www.gnu.org/licenses/agpl-3.0.txt)
 
-Copyright (C) 2021-2025 KunoiSayami
+Copyright (C) 2021-2026 KunoiSayami
 
 This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or any later version.
 
