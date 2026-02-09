@@ -1,6 +1,6 @@
 [package]
 name = "cgit-simple-authentication"
-version = "4.2.0"
+version = "4.2.1"
 authors = ["KunoiSayami <i@leanhe.dev>"]
 edition = "2024"
 
@@ -19,8 +19,8 @@ log = { version = "0.4", features = [
 ] }
 log4rs = "1"
 pam = { git = "https://github.com/1wilkens/pam.git", optional = true }
-rand = "0.9"
-redis = { version = "0.29", features = ["tokio-comp"] }
+rand = "0.10"
+redis = { version = "1", features = ["tokio-comp"] }
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -33,12 +33,12 @@ tempfile = "3"
 itertools = "0.14"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
-toml = "0.8"
+toml = "0.9"
 url = "2.1"
 uuid = { version = "1.2.1", features = ["v4"] }
 
 [target.aarch64-unknown-linux-musl.dependencies]
-cpufeatures = "0.2.5"
+cpufeatures = "0.3"
 
 [profile.release]
 lto = true

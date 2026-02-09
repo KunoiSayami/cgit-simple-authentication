@@ -24,7 +24,7 @@ use base64::Engine;
 #[cfg(feature = "pam")]
 pub use ds_pam::*;
 use log::error;
-use rand::Rng;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use sqlx::ConnectOptions;
 #[cfg(feature = "pam")]
@@ -562,12 +562,12 @@ impl From<String> for FormData {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+/* #[derive(Serialize, Deserialize)]
 struct IvFile {
     iv: String,
     timestamp: u64,
 }
-
+ */
 #[derive(Debug)]
 pub struct Cookie {
     timestamp: u64,
