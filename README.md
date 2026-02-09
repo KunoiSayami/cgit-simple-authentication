@@ -16,7 +16,7 @@ Simple authentication filter for [cgit](https://wiki.archlinux.org/title/Cgit) p
 ## Requirements
 
 - [Rust](https://www.rust-lang.org/) (for building from source)
-- [Redis](https://wiki.archlinux.org/title/Redis) (running on `127.0.0.1`)
+- [Redis](https://wiki.archlinux.org/title/Redis) (default: `127.0.0.1`, configurable via `cgit-simple-auth-redis-url`)
 - [cgit](https://wiki.archlinux.org/title/Cgit) with `auth-filter` support
 
 ## Building
@@ -59,8 +59,11 @@ All options are set in the `cgitrc` file:
 |---|---|---|
 | `cgit-simple-auth-cookie-ttl` | `1200` | Cookie time to live in seconds |
 | `cgit-simple-auth-database` | `/etc/cgit/auth.db` | SQLite database file path |
+| `cgit-simple-auth-redis-url` | `redis://127.0.0.1/` | Redis connection URL |
 | `cgit-simple-auth-bypass-root` | `false` | Skip authentication on the repository list (root) page |
 | `cgit-simple-auth-protect` | `full` | Protection mode: `full`, `part`, or `none` |
+| `cgit-simple-auth-max-login-attempts` | `5` | Max failed login attempts before lockout (0 to disable) |
+| `cgit-simple-auth-login-timeout` | `900` | Lockout duration in seconds after max failed attempts |
 
 ### Protection Modes
 

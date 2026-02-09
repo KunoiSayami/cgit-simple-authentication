@@ -55,7 +55,7 @@ mod core {
     }
 
     async fn async_test_redis() -> anyhow::Result<()> {
-        let redis_conn = redis::Client::open("redis://127.0.0.1/")?;
+        let redis_conn = redis::Client::open(crate::datastructures::DEFAULT_REDIS_URL)?;
         let mut conn = redis_conn.get_multiplexed_async_connection().await?;
 
         let s = rand_str(crate::datastructures::COOKIE_LENGTH);
@@ -344,10 +344,14 @@ mod core {
     }
 
     async fn clear_redis_setting() -> anyhow::Result<()> {
-        let client = redis::Client::open("redis://127.0.0.1")?;
+        let client = redis::Client::open(crate::datastructures::DEFAULT_REDIS_URL)?;
         let mut conn = client.get_multiplexed_async_connection().await?;
 
-        for key in &["cgit_repo_test", "cgit_repo_repo"] {
+        for key in &[
+            "cgit_repo_test",
+            "cgit_repo_repo",
+            "cgit_auth_failed_hunter2",
+        ] {
             conn.del::<_, i32>(*key).await?;
         }
         Ok(())

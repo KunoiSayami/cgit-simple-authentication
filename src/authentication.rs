@@ -1,4 +1,3 @@
-
 use crate::datastructures::{Config, Cookie, FormData, WrapConfigure};
 use anyhow::Result;
 use clap::ArgMatches;
@@ -41,6 +40,30 @@ impl<R: BufRead, W: Write> IOModule<R, W> {
 
         let cfg = WrapConfigure::from(cfg);
         log::trace!("Method is {}", cfg.get_authorizer().method());
+
+        // Establish Redis connection early for rate limiting + session storage
+        let redis_client = redis::Client::open(cfg.get_config().redis_url.as_str())?;
+        let mut conn = redis_client.get_multiplexed_async_connection().await?;
+
+        // Rate limit check
+        let max_attempts = cfg.get_config().max_login_attempts;
+        let login_timeout = cfg.get_config().login_timeout;
+
+        if max_attempts > 0 {
+            let rate_limit_key = format!("cgit_auth_failed_{}", data.get_user());
+            let attempt_count: u64 = conn.get(&rate_limit_key).await.unwrap_or(0);
+            if attempt_count >= max_attempts {
+                log::warn!(
+                    "User {} is locked out due to too many failed login attempts",
+                    data.get_user()
+                );
+                writeln!(&mut self.writer, "Status: 403 Forbidden")?;
+                writeln!(&mut self.writer, "Cache-Control: no-cache, no-store")?;
+                writeln!(&mut self.writer)?;
+                return Ok(());
+            }
+        }
+
         let ret = verify_login(&cfg, &data).await;
 
         if let Err(ref e) = ret {
@@ -54,9 +77,13 @@ impl<R: BufRead, W: Write> IOModule<R, W> {
         }
 
         if ret.unwrap_or(false) {
-            let redis_conn = redis::Client::open("redis://127.0.0.1/")?;
+            // Clear failed attempt counter on successful login
+            if max_attempts > 0 {
+                let rate_limit_key = format!("cgit_auth_failed_{}", data.get_user());
+                let _: () = conn.del(&rate_limit_key).await.unwrap_or(());
+            }
+
             let cookie = Cookie::generate(data.get_user());
-            let mut conn = redis_conn.get_multiplexed_async_connection().await?;
 
             conn.set_ex::<_, _, String>(
                 format!("cgit_auth_{}", cookie.get_key()),
@@ -79,16 +106,31 @@ impl<R: BufRead, W: Write> IOModule<R, W> {
                 .get_one::<String>("http-referer")
                 .map(|s| s.as_str())
                 .unwrap_or("/");
-            let cookie_suffix = if is_secure { "; secure" } else { "" };
+            let cookie_suffix = if is_secure { "; Secure" } else { "" };
             writeln!(&mut self.writer, "Status: 302 Found")?;
             writeln!(&mut self.writer, "Cache-Control: no-cache, no-store")?;
             writeln!(&mut self.writer, "Location: {location}")?;
             writeln!(
                 &mut self.writer,
-                "Set-Cookie: cgit_auth={cookie_value}; Domain={domain}; Max-Age={}; HttpOnly{cookie_suffix}",
+                "Set-Cookie: cgit_auth={cookie_value}; Domain={domain}; Max-Age={}; HttpOnly; SameSite=Lax{cookie_suffix}",
                 cfg.get_config().cookie_ttl * 10,
             )?;
         } else {
+            // Increment rate limit counter on failed login
+            if max_attempts > 0 {
+                let rate_limit_key = format!("cgit_auth_failed_{}", data.get_user());
+                let new_count: u64 = conn.incr(&rate_limit_key, 1u64).await.unwrap_or(1);
+                if new_count == 1 {
+                    let _: () = conn
+                        .expire(&rate_limit_key, login_timeout as i64)
+                        .await
+                        .unwrap_or(());
+                }
+                log::info!(
+                    "Failed login attempt {new_count}/{max_attempts} for user {}",
+                    data.get_user()
+                );
+            }
             writeln!(&mut self.writer, "Status: 403 Forbidden")?;
             writeln!(&mut self.writer, "Cache-Control: no-cache, no-store")?;
         }
@@ -124,7 +166,7 @@ pub(crate) async fn cmd_authenticate_cookie(matches: &ArgMatches, cfg: Config) -
         return Ok(false);
     }
 
-    let redis_conn = redis::Client::open("redis://127.0.0.1/")?;
+    let redis_conn = redis::Client::open(cfg.redis_url.as_str())?;
     let mut conn = redis_conn.get_multiplexed_async_connection().await?;
 
     let redis_key = format!("cgit_repo_{repo}");
@@ -218,7 +260,6 @@ pub(crate) async fn verify_login(cfg: &WrapConfigure, data: &FormData) -> Result
     cfg.hook().await?;
     data.authorize(cfg.get_authorizer()).await
 }
-
 
 #[derive(Serialize)]
 pub struct Meta<'a> {
@@ -463,7 +504,7 @@ pub(crate) async fn cmd_repo_user_control(
         return Err(anyhow::Error::msg("Invalid repository or username"));
     }
 
-    let redis_client = redis::Client::open("redis://127.0.0.1/")?;
+    let redis_client = redis::Client::open(cfg.redis_url.as_str())?;
     let mut redis_conn = redis_client.get_multiplexed_async_connection().await?;
 
     let mut conn = SqliteConnection::connect(cfg.get_database_location()).await?;

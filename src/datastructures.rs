@@ -23,7 +23,6 @@ use argon2::{
 use base64::Engine;
 use log::error;
 use rand::RngExt;
-use serde::{Deserialize, Serialize};
 use sqlx::ConnectOptions;
 use std::borrow::Cow;
 use std::fmt::{Debug, Formatter};
@@ -36,6 +35,9 @@ use url::form_urlencoded;
 const DEFAULT_CONFIG_LOCATION: &str = "/etc/cgitrc";
 const DEFAULT_COOKIE_TTL: u64 = 1200;
 const DEFAULT_DATABASE_LOCATION: &str = "/etc/cgit/auth.db";
+pub(crate) const DEFAULT_REDIS_URL: &str = "redis://127.0.0.1/";
+const DEFAULT_MAX_LOGIN_ATTEMPTS: u64 = 5;
+const DEFAULT_LOGIN_TIMEOUT: u64 = 900;
 pub const CACHE_DIR: &str = "/var/cache/cgit";
 pub type RandIntType = u32;
 pub const COOKIE_LENGTH: usize = 32;
@@ -73,12 +75,14 @@ pub(crate) trait TestSuite {
     fn generate_test_config() -> Self;
 }
 
-
 #[derive(Debug, Clone)]
 pub struct Config {
     pub cookie_ttl: u64,
     database: String,
+    pub redis_url: String,
     pub bypass_root: bool,
+    pub max_login_attempts: u64,
+    pub login_timeout: u64,
     pub(crate) test: bool,
     protect_config: ProtectSettings,
 }
@@ -88,7 +92,10 @@ impl Default for Config {
         Self {
             cookie_ttl: DEFAULT_COOKIE_TTL,
             database: DEFAULT_DATABASE_LOCATION.to_string(),
+            redis_url: DEFAULT_REDIS_URL.to_string(),
             bypass_root: false,
+            max_login_attempts: DEFAULT_MAX_LOGIN_ATTEMPTS,
+            login_timeout: DEFAULT_LOGIN_TIMEOUT,
             test: false,
             protect_config: Default::default(),
         }
@@ -105,7 +112,10 @@ impl Config {
 
         let mut cookie_ttl: u64 = DEFAULT_COOKIE_TTL;
         let mut database: &str = "/etc/cgit/auth.db";
+        let mut redis_url: &str = DEFAULT_REDIS_URL;
         let mut bypass_root: bool = false;
+        let mut max_login_attempts: u64 = DEFAULT_MAX_LOGIN_ATTEMPTS;
+        let mut login_timeout: u64 = DEFAULT_LOGIN_TIMEOUT;
         let mut protect_enabled: bool = true;
         let mut protect_white_list_mode: bool = true;
         //let mut skip_user_access_check: bool = false;
@@ -126,7 +136,12 @@ impl Config {
             match key_name {
                 "cookie-ttl" => cookie_ttl = value.parse().unwrap_or(DEFAULT_COOKIE_TTL),
                 "database" => database = value,
+                "redis-url" => redis_url = value,
                 "bypass-root" => bypass_root = value.to_lowercase().eq("true"),
+                "max-login-attempts" => {
+                    max_login_attempts = value.parse().unwrap_or(DEFAULT_MAX_LOGIN_ATTEMPTS)
+                }
+                "login-timeout" => login_timeout = value.parse().unwrap_or(DEFAULT_LOGIN_TIMEOUT),
                 "protect" => match value.to_lowercase().as_str() {
                     "full" => {
                         protect_enabled = true;
@@ -148,7 +163,10 @@ impl Config {
         Self {
             cookie_ttl,
             database: database.to_string(),
+            redis_url: redis_url.to_string(),
             bypass_root,
+            max_login_attempts,
+            login_timeout,
 
             test: false,
             protect_config: ProtectSettings::from_path(
@@ -245,8 +263,11 @@ impl TestSuite for Config {
     fn generate_test_config() -> Self {
         Self {
             database: "test/tmp.db".to_string(),
+            redis_url: DEFAULT_REDIS_URL.to_string(),
             bypass_root: false,
             cookie_ttl: DEFAULT_COOKIE_TTL,
+            max_login_attempts: DEFAULT_MAX_LOGIN_ATTEMPTS,
+            login_timeout: DEFAULT_LOGIN_TIMEOUT,
             test: true,
             protect_config: ProtectSettings::generate_test_config(),
         }
@@ -624,7 +645,6 @@ impl From<Config> for WrapConfigure {
         }
     }
 }
-
 
 #[derive(Debug, Clone)]
 struct SQLAuthorizer {
