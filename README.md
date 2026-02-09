@@ -8,7 +8,6 @@ Simple authentication filter for [cgit](https://wiki.archlinux.org/title/Cgit) p
 - Password hashing with [Argon2](https://en.wikipedia.org/wiki/Argon2)
 - Per-repository access control lists (ACL)
 - Flexible protection modes: protect all repos, selected repos, or none
-- Optional [PAM](https://wiki.archlinux.org/title/PAM) authentication support
 - Session storage via Redis for fast cookie validation
 - Built-in login page served by the filter
 - Database migration support (v2 to v3)
@@ -62,7 +61,6 @@ All options are set in the `cgitrc` file:
 | `cgit-simple-auth-database` | `/etc/cgit/auth.db` | SQLite database file path |
 | `cgit-simple-auth-bypass-root` | `false` | Skip authentication on the repository list (root) page |
 | `cgit-simple-auth-protect` | `full` | Protection mode: `full`, `part`, or `none` |
-| `cgit-simple-auth-use-pam` | `false` | PAM service name, or `false` to disable |
 
 ### Protection Modes
 
@@ -105,18 +103,6 @@ cgit-simple-authentication repo list
 
 # Show ACL for a specific repository
 cgit-simple-authentication repo list my-repo
-```
-
-### PAM Authentication
-
-To authenticate against system users via PAM instead of the built-in SQLite database, enable the `pam` feature at compile time and set the PAM service name:
-
-```shell
-cargo build --release --features pam
-```
-
-```conf
-cgit-simple-auth-use-pam=system-auth
 ```
 
 ### Logging

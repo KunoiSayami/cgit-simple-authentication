@@ -1,5 +1,4 @@
-#[cfg(feature = "pam")]
-use crate::datastructures::AuthorizerType;
+
 use crate::datastructures::{Config, Cookie, FormData, WrapConfigure};
 use anyhow::Result;
 use clap::ArgMatches;
@@ -215,19 +214,11 @@ pub(crate) async fn cmd_init(cfg: Config) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(feature = "pam"))]
 pub(crate) async fn verify_login(cfg: &WrapConfigure, data: &FormData) -> Result<bool> {
     cfg.hook().await?;
     data.authorize(cfg.get_authorizer()).await
 }
 
-#[cfg(feature = "pam")]
-pub(crate) async fn verify_login(cfg: &WrapConfigure, data: &FormData) -> Result<bool> {
-    if let AuthorizerType::Password = cfg.get_authorizer().method() {
-        cfg.hook().await?;
-    }
-    data.authorize(cfg.get_authorizer()).await
-}
 
 #[derive(Serialize)]
 pub struct Meta<'a> {

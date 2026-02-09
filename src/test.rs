@@ -29,8 +29,6 @@ mod core {
         password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     };
     use redis::AsyncCommands;
-    #[cfg(feature = "pam")]
-    use std::borrow::BorrowMut;
     use std::io::{Read, Write};
     use std::path::Path;
     use std::path::PathBuf;
@@ -365,20 +363,5 @@ mod core {
             .unwrap()
             .block_on(clear_redis_setting())
             .unwrap();
-    }
-
-    #[cfg(feature = "pam")]
-    #[ignore]
-    #[test]
-    fn test_pam() {
-        let service = option_env!("pam_service").unwrap_or("system-auth");
-        let user = option_env!("pam_user").unwrap_or("user");
-        let password = option_env!("pam_password").unwrap_or("password");
-
-        let mut auth = pam::Client::with_password(service).unwrap();
-        auth.conversation_mut()
-            .borrow_mut()
-            .set_credentials(user, password);
-        assert!(auth.authenticate().is_ok() && auth.open_session().is_ok())
     }
 }

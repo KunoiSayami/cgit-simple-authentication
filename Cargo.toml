@@ -1,6 +1,6 @@
 [package]
 name = "cgit-simple-authentication"
-version = "4.2.1"
+version = "4.3.0"
 authors = ["KunoiSayami <i@leanhe.dev>"]
 edition = "2024"
 
@@ -18,7 +18,6 @@ log = { version = "0.4", features = [
     "release_max_level_info",
 ] }
 log4rs = "1"
-pam = { git = "https://github.com/1wilkens/pam.git", optional = true }
 rand = "0.10"
 redis = { version = "1", features = ["tokio-comp"] }
 regex = "1"
@@ -43,6 +42,3 @@ cpufeatures = "0.3"
 [profile.release]
 lto = true
 panic = "abort"
-
-[features]
-default = []
