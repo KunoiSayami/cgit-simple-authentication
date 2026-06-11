@@ -133,7 +133,7 @@ fn get_arg_matches(arguments: Option<Vec<&str>>) -> ArgMatches {
         )
         .subcommand(
             Command::new("database")
-                .about("Database rated commands")
+                .about("Database related commands")
                 .subcommand(
                     Command::new("init")
                         .about("Init sqlite database")
@@ -154,7 +154,7 @@ fn get_arg_matches(arguments: Option<Vec<&str>>) -> ArgMatches {
         )
         .subcommand(
             Command::new("user")
-                .about("Users rated commands")
+                .about("User related commands")
                 .subcommand(
                     Command::new("add")
                         .about("Add user to database")
@@ -177,7 +177,7 @@ fn get_arg_matches(arguments: Option<Vec<&str>>) -> ArgMatches {
         )
         .subcommand(
             Command::new("repo")
-                .about("Repository ACL rated commands")
+                .about("Repository ACL related commands")
                 .subcommand(
                     Command::new("add")
                         .about("Add user to repository")

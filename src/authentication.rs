@@ -42,8 +42,9 @@ impl<R: BufRead, W: Write> IOModule<R, W> {
         log::trace!("Method is {}", cfg.get_authorizer().method());
 
         // Establish Redis connection early for rate limiting + session storage
-        let redis_client = redis::Client::open(cfg.get_config().redis_url.as_str())?;
-        let mut conn = redis_client.get_multiplexed_async_connection().await?;
+        let mut conn =
+            crate::datastructures::get_redis_connection(cfg.get_config().redis_url.as_str())
+                .await?;
 
         // Rate limit check
         let max_attempts = cfg.get_config().max_login_attempts;
@@ -166,8 +167,7 @@ pub(crate) async fn cmd_authenticate_cookie(matches: &ArgMatches, cfg: Config) -
         return Ok(false);
     }
 
-    let redis_conn = redis::Client::open(cfg.redis_url.as_str())?;
-    let mut conn = redis_conn.get_multiplexed_async_connection().await?;
+    let mut conn = crate::datastructures::get_redis_connection(cfg.redis_url.as_str()).await?;
 
     let redis_key = format!("cgit_repo_{repo}");
     if !repo.is_empty() && !conn.exists(&redis_key).await? {
@@ -289,7 +289,7 @@ pub(crate) async fn cmd_body(matches: &ArgMatches, _cfg: Config) {
 }
 
 pub(crate) async fn cmd_add_user(matches: &ArgMatches, cfg: Config) -> Result<()> {
-    let re = regex::Regex::new(r"^\w+$").unwrap();
+    let re = regex::Regex::new(r"^[a-zA-Z0-9_][a-zA-Z0-9_.\-]*[a-zA-Z0-9_]$").unwrap();
     let user = matches
         .get_one::<String>("user")
         .map(|s| s.as_str())
@@ -308,7 +308,7 @@ pub(crate) async fn cmd_add_user(matches: &ArgMatches, cfg: Config) -> Result<()
 
     if !re.is_match(user) {
         return Err(anyhow::Error::msg(
-            "Username must pass regex check\"^\\w+$\"",
+            "Username must be at least 2 characters, contain only alphanumeric characters, underscores, dots, or hyphens, and must not start or end with a dot or hyphen",
         ));
     }
 
@@ -504,8 +504,8 @@ pub(crate) async fn cmd_repo_user_control(
         return Err(anyhow::Error::msg("Invalid repository or username"));
     }
 
-    let redis_client = redis::Client::open(cfg.redis_url.as_str())?;
-    let mut redis_conn = redis_client.get_multiplexed_async_connection().await?;
+    let mut redis_conn =
+        crate::datastructures::get_redis_connection(cfg.redis_url.as_str()).await?;
 
     let mut conn = SqliteConnection::connect(cfg.get_database_location()).await?;
 

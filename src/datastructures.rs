@@ -71,6 +71,13 @@ pub fn rand_str(len: usize) -> String {
     password
 }
 
+pub(crate) async fn get_redis_connection(
+    redis_url: &str,
+) -> Result<redis::aio::MultiplexedConnection> {
+    let client = redis::Client::open(redis_url)?;
+    Ok(client.get_multiplexed_async_connection().await?)
+}
+
 pub(crate) trait TestSuite {
     fn generate_test_config() -> Self;
 }
@@ -532,7 +539,9 @@ impl Cookie {
     pub fn load_from_request(cookies: &str) -> Result<Option<Self>> {
         let mut cookie_self = None;
         for cookie in cookies.split(';').map(|x| x.trim()) {
-            let (key, value) = cookie.split_once('=').unwrap();
+            let Some((key, value)) = cookie.split_once('=') else {
+                continue;
+            };
             if key.eq("cgit_auth") {
                 let value = base64::engine::general_purpose::STANDARD
                     .decode(value)
