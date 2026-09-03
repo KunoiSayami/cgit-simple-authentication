@@ -18,7 +18,7 @@
 use anyhow::Result;
 use argon2::{
     Argon2,
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
+    password_hash::{PasswordHasher, PasswordVerifier, phc::PasswordHash},
 };
 use base64::Engine;
 use log::error;
@@ -455,11 +455,10 @@ impl FormData {
 
     pub fn gen_string_argon2_hash(s: &str) -> Result<String> {
         let passwd = s.as_bytes();
-        let salt = SaltString::generate(&mut OsRng);
 
         let argon2_alg = Argon2::default();
 
-        Ok(argon2_alg.hash_password(passwd, &salt).unwrap().to_string())
+        Ok(argon2_alg.hash_password(passwd).unwrap().to_string())
     }
 
     pub fn set_password(&mut self, password: String) {

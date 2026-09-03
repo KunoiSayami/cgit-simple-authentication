@@ -26,7 +26,7 @@ mod core {
     };
     use argon2::{
         Argon2,
-        password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+        password_hash::{PasswordHasher, PasswordVerifier, phc::PasswordHash},
     };
     use redis::AsyncCommands;
     use std::io::{Read, Write};
@@ -37,13 +37,11 @@ mod core {
 
     #[test]
     fn test_argon2() {
-        use argon2::password_hash::rand_core::OsRng;
         let passwd = b"hunter2";
-        let salt = SaltString::generate(&mut OsRng);
 
         let argon2 = Argon2::default();
 
-        argon2.hash_password(passwd, &salt).unwrap();
+        argon2.hash_password(passwd).unwrap();
     }
 
     #[test]
